@@ -170,12 +170,12 @@ Crie uma branch a partir de `main`, faça suas alterações...
   - Renderiza conteúdo com `react-markdown`
   - Exibe nome do arquivo e data de upload
   - Seção colapsável (toggle)
-- [ ] Criar `src/components/ChatInterface.tsx`
+- [x] Criar `src/components/ChatInterface.tsx`
   - Lista de mensagens com scroll automático
   - Input de texto + botão enviar
   - Estado de loading durante a resposta
   - Envia `POST /api/chat` com histórico acumulado
-- [ ] Atualizar `src/app/page.tsx`
+- [x] Atualizar `src/app/page.tsx`
   - Layout de 2 colunas: painel esquerdo (FAQUpload + FAQViewer) | painel direito (ChatInterface)
   - Responsivo para mobile
 
