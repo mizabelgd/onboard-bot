@@ -40,6 +40,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# uploads (FAQ files e índice gerado)
+# uploads (FAQ ativa gerada em runtime — não commitar)
 /uploads/*.md
+!/uploads/faq-teste.md
 /uploads/*.json
