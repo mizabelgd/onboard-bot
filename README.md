@@ -122,16 +122,16 @@ Crie uma branch a partir de `main`, faça suas alterações...
 ### Etapa 1 — Infraestrutura RAG `lib/`
 > Estimativa: 2–3h
 
-- [ ] Criar `src/lib/gemini.ts`
+- [x] Criar `src/lib/gemini.ts`
   - Função `generateEmbedding(text: string): Promise<number[]>` — chama `text-embedding-004`
   - Função `generateAnswer(prompt: string): Promise<string>` — chama `gemini-1.5-flash`
-- [ ] Criar `src/lib/rag.ts`
+- [x] Criar `src/lib/rag.ts`
   - Função `parseMarkdownToChunks(md: string): FAQChunk[]` — split por headings `##`
   - Função `cosineSimilarity(a: number[], b: number[]): number`
   - Função `retrieveTopK(query: string, store: FAQChunk[], k: number): FAQChunk[]`
-- [ ] Criar `src/lib/store.ts`
+- [x] Criar `src/lib/store.ts`
   - Singleton `faqStore` com `set(chunks)` e `get(): FAQChunk[]`
-- [ ] Criar `src/types/index.ts`
+- [x] Criar `src/types/index.ts`
   - Tipos: `Message`, `FAQChunk`, `FAQStatus`, `ChatRequest`, `ChatResponse`
 
 ---
