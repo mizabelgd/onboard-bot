@@ -117,6 +117,32 @@ Clone o repositório e execute `make setup`...
 Crie uma branch a partir de `main`, faça suas alterações...
 ```
 
+### FAQ de teste
+
+O arquivo [`uploads/faq-teste.md`](./uploads/faq-teste.md) é uma base de conhecimento fictícia com **100 perguntas e respostas** pronta para uso nos testes do protótipo. Os dados são fictícios (empresa imaginária **Nexus Sistemas**) para não expor informações reais em ambiente de demonstração.
+
+**Stack fictícia coberta:** Node.js · TypeScript · PostgreSQL · Redis · MongoDB · Docker · Kubernetes (EKS) · GitHub Actions · Terraform · Grafana · Sentry · PagerDuty · Datadog · LaunchDarkly · BullMQ · SendGrid · Zod · Jest
+
+**Temas das perguntas:**
+
+| Tema | Perguntas |
+|---|---|
+| Git, branches e Pull Requests | 8 |
+| Setup e ambiente local | 8 |
+| Jira, Slack e comunicação | 7 |
+| CI/CD e deploy | 7 |
+| Banco de dados e migrations | 6 |
+| Testes (unitários, integração, cobertura) | 5 |
+| Segurança e boas práticas | 6 |
+| Infraestrutura e cloud (AWS) | 7 |
+| Arquitetura de código e padrões | 9 |
+| Monitoramento e logs | 6 |
+| Processos ágeis (Scrum/Kanban) | 7 |
+| Ferramentas (VS Code, Docker, Storybook) | 7 |
+| RH, carreira e onboarding | 7 |
+
+Para usá-la, faça upload do arquivo pela interface do OnboardBot.
+
 ---
 
 ## Roadmap de implementação
