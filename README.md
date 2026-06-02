@@ -161,11 +161,11 @@ Crie uma branch a partir de `main`, faça suas alterações...
 ### Etapa 3 — Componentes de UI
 > Estimativa: 3–4h
 
-- [ ] Criar `src/components/FAQUpload.tsx`
+- [x] Criar `src/components/FAQUpload.tsx`
   - Input de arquivo com drag-and-drop ou botão
   - Feedback visual: "Indexando...", "X perguntas indexadas", erros
   - Ao enviar, chama `POST /api/faq/upload`
-- [ ] Criar `src/components/FAQViewer.tsx`
+- [x] Criar `src/components/FAQViewer.tsx`
   - Busca `GET /api/faq` ao montar
   - Renderiza conteúdo com `react-markdown`
   - Exibe nome do arquivo e data de upload
