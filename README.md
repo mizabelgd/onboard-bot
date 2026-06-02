@@ -18,6 +18,8 @@ O OnboardBot permite que uma equipe carregue um arquivo FAQ em Markdown. A parti
 4. Envia os chunks + pergunta ao Gemini Flash, que gera a resposta
 5. Um novo upload substitui a base de conhecimento ativa
 
+**O chatbot é conversacional.** O histórico da sessão é mantido no cliente (React state) e as últimas 6 mensagens são enviadas junto com cada pergunta. Isso permite perguntas de acompanhamento naturais — "pode detalhar?", "e no Windows?", "como faço isso para o outro ambiente?" — sem que o usuário precise repetir o contexto. O histórico não é persistido: ao recarregar a página, a conversa começa do zero (a FAQ carregada é mantida).
+
 ---
 
 ## Stack
@@ -139,16 +141,16 @@ Crie uma branch a partir de `main`, faça suas alterações...
 ### Etapa 2 — API Routes
 > Estimativa: 2–3h
 
-- [ ] Criar `src/app/api/faq/upload/route.ts` — `POST /api/faq/upload`
+- [x] Criar `src/app/api/faq/upload/route.ts` — `POST /api/faq/upload`
   - Recebe `FormData` com `file: File`
   - Valida extensão `.md`
   - Salva `current-faq.md` em `uploads/`
   - Chama `parseMarkdownToChunks` → gera embeddings com `Promise.all` → salva no store
   - Retorna `{ success, chunkCount, filename }`
-- [ ] Criar `src/app/api/faq/route.ts` — `GET /api/faq`
+- [x] Criar `src/app/api/faq/route.ts` — `GET /api/faq`
   - Lê `uploads/current-faq.md`
   - Retorna `{ content, status: FAQStatus }`
-- [ ] Criar `src/app/api/chat/route.ts` — `POST /api/chat`
+- [x] Criar `src/app/api/chat/route.ts` — `POST /api/chat`
   - Recebe `{ message, history }`
   - Gera embedding da pergunta → `retrieveTopK(k=3)`
   - Monta prompt RAG com chunks + histórico + pergunta

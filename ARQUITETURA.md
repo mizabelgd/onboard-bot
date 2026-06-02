@@ -126,7 +126,33 @@ Retornar: { answer: string, retrievedChunks: string[] }
 Exibir resposta no chat
 ```
 
-### 4.3 Troca da Base de Conhecimento
+### 4.3 Memória Conversacional
+
+O chatbot é **conversacional**: o usuário pode fazer perguntas de acompanhamento sem repetir o contexto anterior.
+
+**Como funciona:**
+
+- O histórico de mensagens é mantido exclusivamente no **cliente** (React state) — sem sessão no servidor, sem banco de dados.
+- A cada nova mensagem, o frontend envia `{ message, history[] }` onde `history` contém as mensagens anteriores da sessão.
+- O servidor inclui as **últimas 6 mensagens** do histórico no prompt enviado ao Gemini Flash (3 pares pergunta/resposta). Esse limite evita que o prompt cresça indefinidamente e estoure o orçamento de tokens.
+- O modelo pode referenciar respostas anteriores para dar continuidade à conversa.
+
+**Exemplos de perguntas de acompanhamento suportadas:**
+
+```
+Usuário: Como configuro o ambiente local?
+Bot: [resposta com base no FAQ]
+
+Usuário: E no Windows, o processo é o mesmo?
+Bot: [responde considerando que a pergunta é sobre o mesmo tópico]
+
+Usuário: Pode detalhar o passo 3?
+Bot: [detalha sem precisar repetir a pergunta original]
+```
+
+**Limite de memória:** o histórico não é persistido entre sessões. Ao recarregar a página, a conversa recomeça do zero — a FAQ carregada permanece ativa, mas as mensagens anteriores são perdidas. Isso é esperado e documentado como limitação do MVP.
+
+### 4.5 Troca da Base de Conhecimento
 
 ```
 Usuário faz upload de novo arquivo .md
@@ -142,7 +168,7 @@ Sobrescrever uploads/current-faq.md e uploads/index.json
 Chatbot passa a usar o novo FAQ imediatamente
 ```
 
-### 4.4 Pergunta Fora do FAQ
+### 4.6 Pergunta Fora do FAQ
 
 O prompt instrui explicitamente o modelo:
 
@@ -176,7 +202,7 @@ Trecho 3: {heading_3}
 {content_3}
 
 [Histórico da Conversa]
-{últimas 6 mensagens do histórico}
+{últimas 6 mensagens — 3 pares pergunta/resposta — mantidas no cliente e enviadas a cada request}
 
 [Pergunta]
 {mensagem do usuário}

@@ -1,6 +1,12 @@
 import { generateEmbedding } from './gemini'
 import type { FAQChunk } from '../types'
 
+/**
+ * Divide um Markdown de FAQ em chunks por heading ##.
+ * Cada chunk contém o heading e o conteúdo abaixo dele concatenados em `text`,
+ * que é o campo enviado ao modelo de embedding e ao prompt RAG.
+ * Seções sem conteúdo ou sem heading válido são ignoradas.
+ */
 export function parseMarkdownToChunks(md: string): Omit<FAQChunk, 'embedding'>[] {
   const chunks: Omit<FAQChunk, 'embedding'>[] = []
 
@@ -24,6 +30,10 @@ export function parseMarkdownToChunks(md: string): Omit<FAQChunk, 'embedding'>[]
   return chunks
 }
 
+/**
+ * Calcula a similaridade de cosseno entre dois vetores de embedding.
+ * Retorna valores entre -1 (opostos) e 1 (idênticos); retorna 0 se algum vetor for nulo.
+ */
 export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0
   let magA = 0
@@ -39,6 +49,15 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(magA) * Math.sqrt(magB))
 }
 
+/**
+ * Recupera os k chunks mais relevantes para a query usando similaridade semântica.
+ * Gera o embedding da query, compara com todos os chunks do store e retorna os top-k
+ * ordenados por similaridade decrescente.
+ *
+ * @param query  Pergunta do usuário em texto livre.
+ * @param store  Chunks indexados com embeddings pré-calculados.
+ * @param k      Número de chunks a retornar (recomendado: 3).
+ */
 export async function retrieveTopK(
   query: string,
   store: FAQChunk[],
