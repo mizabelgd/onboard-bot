@@ -4,7 +4,8 @@ import { retrieveTopK } from '@/lib/rag'
 import { generateAnswer } from '@/lib/gemini'
 import type { ChatRequest, ChatResponse, Message } from '@/types'
 
-const HISTORY_LIMIT = 6 // últimas 6 mensagens = 3 pares pergunta/resposta
+const HISTORY_LIMIT = parseInt(process.env.HISTORY_LIMIT ?? '6', 10)
+const RAG_TOP_K = parseInt(process.env.RAG_TOP_K ?? '3', 10)
 
 /**
  * Monta o prompt RAG completo com instrução do sistema, contexto recuperado,
@@ -68,7 +69,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const topChunks = await retrieveTopK(message, chunks, 3)
+    const topChunks = await retrieveTopK(message, chunks, RAG_TOP_K)
     const prompt = buildRagPrompt(topChunks, history, message)
     const answer = await generateAnswer(prompt)
 
