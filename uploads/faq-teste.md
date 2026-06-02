@@ -1,4 +1,4 @@
-ca# FAQ de Onboarding — Nexus Sistemas
+# FAQ de Onboarding — Nexus Sistemas
 
 Base de conhecimento para novos desenvolvedores da Nexus Sistemas. Atualizado em janeiro de 2025.
 
