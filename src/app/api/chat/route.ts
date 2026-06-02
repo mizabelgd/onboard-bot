@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { faqStore } from '@/lib/store'
+import { faqStore, initStoreFromDisk } from '@/lib/store'
 import { retrieveTopK } from '@/lib/rag'
 import { generateAnswer } from '@/lib/gemini'
 import type { ChatRequest, ChatResponse, Message } from '@/types'
@@ -54,6 +54,7 @@ Seja direto e objetivo.`
  */
 export async function POST(request: NextRequest) {
   try {
+    await initStoreFromDisk()
     const body = (await request.json()) as ChatRequest
     const { message, history = [] } = body
 

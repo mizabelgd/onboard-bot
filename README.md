@@ -210,12 +210,12 @@ Para usá-la, faça upload do arquivo pela interface do OnboardBot.
 ### Etapa 4 — Integração e testes manuais
 > Estimativa: 2h
 
-- [ ] Testar upload → indexação → chat completo
-- [ ] Testar troca de FAQ durante sessão ativa
-- [ ] Testar pergunta fora do FAQ (resposta negativa esperada)
-- [ ] Verificar no console os chunks recuperados por pergunta
-- [ ] Testar upload de arquivo inválido (sem headings `##`, extensão errada)
-- [ ] Testar comportamento com restart do servidor (re-indexação a partir do `index.json`)
+- [x] Testar upload → indexação → chat completo
+- [x] Testar troca de FAQ durante sessão ativa
+- [x] Testar pergunta fora do FAQ (resposta negativa esperada)
+- [x] Verificar no console os chunks recuperados por pergunta
+- [x] Testar upload de arquivo inválido (sem headings `##`, extensão errada)
+- [x] Testar comportamento com restart do servidor (re-indexação a partir do `index.json`)
 
 ---
 

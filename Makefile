@@ -1,4 +1,4 @@
-.PHONY: dev build start lint type-check install clean reset-faq help
+.PHONY: dev build start lint type-check test test-watch install clean reset-faq help
 
 dev:
 	npm run dev
@@ -14,6 +14,12 @@ lint:
 
 type-check:
 	npx tsc --noEmit
+
+test:
+	npm test
+
+test-watch:
+	npm run test:watch
 
 install:
 	npm install
@@ -32,5 +38,7 @@ help:
 	@echo "  lint        Executa o linter"
 	@echo "  type-check  Verifica tipos TypeScript"
 	@echo "  install     Instala dependências"
+	@echo "  test        Executa todos os testes (modo CI)"
+	@echo "  test-watch  Executa testes em modo watch"
 	@echo "  clean       Remove o diretório .next"
 	@echo "  reset-faq   Remove a FAQ ativa do disco"

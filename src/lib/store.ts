@@ -1,3 +1,5 @@
+import { readFile } from 'fs/promises'
+import { join } from 'path'
 import type { FAQChunk, FAQStatus } from '../types'
 
 interface StoreState {
@@ -5,6 +7,8 @@ interface StoreState {
   filename: string
   indexedAt: string
 }
+
+const INDEX_FILE = join(process.cwd(), 'uploads', 'index.json')
 
 // Persiste no globalThis para sobreviver ao HMR do Next.js em desenvolvimento
 const g = globalThis as typeof globalThis & { __faqStore: StoreState | null }
@@ -44,4 +48,20 @@ export const faqStore = {
   clear(): void {
     g.__faqStore = null
   },
+}
+
+/**
+ * Tenta carregar o índice do disco (uploads/index.json) se o store estiver vazio.
+ * Chamada no início de cada request para recuperar o índice após restart do servidor,
+ * evitando a necessidade de re-fazer o upload.
+ */
+export async function initStoreFromDisk(): Promise<void> {
+  if (g.__faqStore !== null) return
+  try {
+    const raw = await readFile(INDEX_FILE, 'utf-8')
+    const state = JSON.parse(raw) as StoreState
+    g.__faqStore = state
+  } catch {
+    // index.json não existe ou está corrompido — store permanece vazio
+  }
 }

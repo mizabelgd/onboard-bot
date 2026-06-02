@@ -1,7 +1,7 @@
 import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { NextResponse } from 'next/server'
-import { faqStore } from '@/lib/store'
+import { faqStore, initStoreFromDisk } from '@/lib/store'
 
 const FAQ_FILE = join(process.cwd(), 'uploads', 'current-faq.md')
 
@@ -17,6 +17,7 @@ const FAQ_FILE = join(process.cwd(), 'uploads', 'current-faq.md')
  * @returns 200 { content: string, status: FAQStatus }
  */
 export async function GET() {
+  await initStoreFromDisk()
   const status = faqStore.getStatus()
 
   let content = ''

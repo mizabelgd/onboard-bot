@@ -64,9 +64,15 @@ export async function POST(request: NextRequest) {
     )
 
     faqStore.set(chunks, file.name)
+    const { indexedAt } = faqStore.getStatus()
 
     await mkdir(UPLOADS_DIR, { recursive: true })
     await writeFile(join(UPLOADS_DIR, 'current-faq.md'), content, 'utf-8')
+    await writeFile(
+      join(UPLOADS_DIR, 'index.json'),
+      JSON.stringify({ chunks, filename: file.name, indexedAt }),
+      'utf-8'
+    )
 
     const response: UploadResponse = {
       success: true,
