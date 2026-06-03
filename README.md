@@ -27,8 +27,8 @@ O OnboardBot permite que uma equipe carregue um arquivo FAQ em Markdown. A parti
 | Camada | Tecnologia |
 |---|---|
 | Frontend / Backend | Next.js 16 + React 19 + Tailwind CSS v4 |
-| LLM | Google Gemini Flash (`gemini-1.5-flash`) |
-| Embeddings | Google Gemini (`text-embedding-004`) |
+| LLM | Google Gemini Flash (`gemini-2.5-flash`) |
+| Embeddings | Google Gemini (`gemini-embedding-2`) |
 | Vector Store | Array in-memory (TypeScript puro) |
 | Markdown | `react-markdown` |
 
@@ -222,9 +222,10 @@ Para usá-la, faça upload do arquivo pela interface do OnboardBot.
 ### Etapa 5 — Polish e preparação da demo
 > Estimativa: 1–2h
 
-- [ ] Loading spinner durante indexação e geração de resposta
-- [ ] Mensagens de erro amigáveis (API key inválida, sem FAQ carregada)
-- [ ] Ajuste visual final com Tailwind
+- [x] Loading spinner durante indexação e geração de resposta
+- [x] Mensagens de erro amigáveis (API key inválida, sem FAQ carregada)
+- [x] Permitir exclusão da base carregada (botão "Remover FAQ" que limpa o store e apaga `index.json`)
+- [x] Ajuste visual final com Tailwind
 - [ ] Gravar screencast da demo (upload → chat)
 - [ ] Preparar FAQ de exemplo para a apresentação
 

@@ -1,9 +1,10 @@
-import { readFile } from 'fs/promises'
+import { readFile, unlink } from 'fs/promises'
 import { join } from 'path'
 import { NextResponse } from 'next/server'
 import { faqStore, initStoreFromDisk } from '@/lib/store'
 
 const FAQ_FILE = join(process.cwd(), 'uploads', 'current-faq.md')
+const INDEX_FILE = join(process.cwd(), 'uploads', 'index.json')
 
 /**
  * GET /api/faq
@@ -28,4 +29,20 @@ export async function GET() {
   }
 
   return NextResponse.json({ content, status })
+}
+
+/**
+ * DELETE /api/faq
+ *
+ * Remove a FAQ ativa: limpa o store em memória e apaga os arquivos de disco.
+ * Erros de arquivo (ex: já inexistente) são ignorados via allSettled.
+ *
+ * @returns 200 { success: true }
+ */
+export async function DELETE() {
+  faqStore.clear()
+
+  await Promise.allSettled([unlink(FAQ_FILE), unlink(INDEX_FILE)])
+
+  return NextResponse.json({ success: true })
 }

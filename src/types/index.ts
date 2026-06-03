@@ -5,6 +5,7 @@ export interface Message {
   role: MessageRole
   content: string
   timestamp: string
+  isError?: boolean
 }
 
 export interface FAQChunk {
