@@ -20,8 +20,12 @@ function buildRagPrompt(
   message: string
 ): string {
   const system = `Você é um assistente de onboarding de desenvolvedores chamado OnboardBot.
-Responda APENAS com base nos trechos de FAQ fornecidos abaixo. Não use conhecimento externo.
-Se a pergunta não puder ser respondida com os trechos fornecidos, diga: "Não encontrei essa informação no FAQ atual. Por favor, consulte seu time ou supervisor."
+
+Para saudações, agradecimentos ou mensagens de conversa geral (ex: "oi", "obrigado", "tchau"), responda de forma natural e amigável — sem mencionar o FAQ.
+
+Para perguntas sobre processos, ferramentas ou informações da empresa, responda APENAS com base nos trechos de FAQ fornecidos abaixo. Não use conhecimento externo.
+Se uma pergunta técnica ou sobre a empresa não puder ser respondida com os trechos fornecidos, diga: "Não encontrei essa informação no FAQ atual. Por favor, consulte seu time ou supervisor."
+
 Seja direto e objetivo.`
 
   const context = chunks
