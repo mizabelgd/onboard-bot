@@ -231,7 +231,44 @@ Para usá-la, faça upload do arquivo pela interface do OnboardBot.
 
 ---
 
-### Total estimado: 10–14 horas
+### Etapa 6 — Observabilidade e Métricas Acadêmicas
+> Estimativa: 3–4h
+
+**M1 — Tipos e persistência de métricas**
+- [x] Adicionar tipos `MessageFeedback`, `ResponseTiming`, `SessionSummary` em `src/types/index.ts`
+- [x] Criar `src/lib/metrics-store.ts` — singleton com leitura/escrita em `uploads/metrics.json`
+
+**M2 — Instrumentar o chat com timing**
+- [x] Medir `retrievalTimeMs` e `generationTimeMs` em `src/app/api/chat/route.ts`
+- [x] Retornar campo `timing` em `ChatResponse`
+
+**M3 — Rotas de métricas**
+- [x] Criar `src/app/api/metrics/route.ts` — `GET /api/metrics` com métricas calculadas (eficiência, efetividade, satisfação)
+- [x] Criar `src/app/api/metrics/feedback/route.ts` — `POST /api/metrics/feedback`
+- [x] Criar `src/app/api/metrics/session/route.ts` — `POST /api/metrics/session`
+
+**M4 — Feedback por mensagem no chat**
+- [x] Adicionar botões 👍 e 👎 após cada resposta do assistente em `ChatInterface.tsx`
+- [x] Enviar feedback para `POST /api/metrics/feedback` ao clicar (uma vez por mensagem)
+
+**M5 — Ciclo de vida da sessão**
+- [x] Gerar `sessionId` ao montar `ChatInterface.tsx`
+- [x] Adicionar botão "Encerrar conversa" (visível após a primeira mensagem)
+- [x] Modal de encerramento: "Sua dúvida foi resolvida?" + avaliação 1–5 estrelas (opcional)
+- [x] Enviar resumo da sessão para `POST /api/metrics/session` ao confirmar
+
+**M6 — Dashboard de métricas**
+- [x] Criar `src/components/MetricsDashboard.tsx` — cards de métricas + tabela de sessões recentes
+- [x] Criar `src/app/dashboard/page.tsx` — rota `/dashboard`
+- [x] Adicionar link "Métricas" no header de `page.tsx`
+
+**M7 — Documentação**
+- [ ] Atualizar `ARQUITETURA.md` com seção de observabilidade (seção 20)
+- [ ] Atualizar `README.md` com descrição das métricas e acesso ao dashboard
+
+---
+
+### Total estimado: 13–18 horas
 
 | Etapa | Horas |
 |---|---|
@@ -240,7 +277,8 @@ Para usá-la, faça upload do arquivo pela interface do OnboardBot.
 | 3 — UI | 3–4h |
 | 4 — Integração | 2h |
 | 5 — Polish | 1–2h |
-| **Total** | **10–14h** |
+| 6 — Observabilidade e Métricas | 3–4h |
+| **Total** | **13–18h** |
 
 ---
 

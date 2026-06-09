@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import FAQUpload from '@/components/FAQUpload'
 import FAQViewer from '@/components/FAQViewer'
 import ChatInterface from '@/components/ChatInterface'
@@ -31,6 +32,13 @@ export default function Home() {
         <span className="text-xs text-neutral-500 bg-neutral-100 rounded-full px-2.5 py-0.5 border border-neutral-200">
           FAQ · RAG · Gemini
         </span>
+        <div className="flex-1" />
+        <Link
+          href="/dashboard"
+          className="text-xs text-neutral-500 hover:text-neutral-700 font-medium"
+        >
+          Métricas →
+        </Link>
       </header>
 
       <main className="flex flex-1 flex-col md:flex-row overflow-hidden">

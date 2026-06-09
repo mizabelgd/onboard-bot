@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { faqStore, initStoreFromDisk } from '@/lib/store'
+import { metricsStore } from '@/lib/metrics-store'
 import { retrieveTopK } from '@/lib/rag'
 import { generateAnswer } from '@/lib/gemini'
-import type { ChatRequest, ChatResponse, Message } from '@/types'
+import type { ChatRequest, ChatResponse, Message, ResponseTiming } from '@/types'
 
 const HISTORY_LIMIT = parseInt(process.env.HISTORY_LIMIT ?? '6', 10)
 const RAG_TOP_K = parseInt(process.env.RAG_TOP_K ?? '3', 10)
@@ -56,18 +57,19 @@ Seja direto e objetivo.`
  *
  * Executa o pipeline RAG completo para uma mensagem do usuário:
  *   1. Valida a mensagem e o estado do store
- *   2. Recupera os top-3 chunks semanticamente mais relevantes
+ *   2. Recupera os top-3 chunks semanticamente mais relevantes (com timing)
  *   3. Monta o prompt RAG com contexto + histórico + pergunta
- *   4. Envia ao Gemini Flash e retorna a resposta
+ *   4. Envia ao Gemini Flash e retorna a resposta (com timing)
+ *   5. Persiste ResponseTiming em metrics.json se sessionId fornecido
  *
- * @param request JSON { message: string, history: Message[] }
- * @returns 200 { answer, retrievedChunks } | 400 { error } | 500 { error }
+ * @param request JSON { message, history, sessionId? }
+ * @returns 200 { answer, retrievedChunks, timing } | 400 { error } | 500 { error }
  */
 export async function POST(request: NextRequest) {
   try {
     await initStoreFromDisk()
     const body = (await request.json()) as ChatRequest
-    const { message, history = [] } = body
+    const { message, history = [], sessionId } = body
 
     if (!message?.trim()) {
       return NextResponse.json({ error: 'Mensagem não pode ser vazia.' }, { status: 400 })
@@ -81,13 +83,38 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const retrievalStart = Date.now()
     const topChunks = await retrieveTopK(message, chunks, RAG_TOP_K)
+    const retrievalTimeMs = Date.now() - retrievalStart
+
     const prompt = buildRagPrompt(topChunks, history, message)
+
+    const generationStart = Date.now()
     const answer = await generateAnswer(prompt)
+    const generationTimeMs = Date.now() - generationStart
+
+    const messageId = crypto.randomUUID()
+    const totalTimeMs = retrievalTimeMs + generationTimeMs
+
+    if (sessionId) {
+      const timing: ResponseTiming = {
+        messageId,
+        sessionId,
+        retrievalTimeMs,
+        generationTimeMs,
+        totalTimeMs,
+        timestamp: new Date().toISOString(),
+      }
+      // falha silenciosa — não deve derrubar a resposta do chat
+      metricsStore.appendTiming(timing).catch((err) =>
+        console.error('[POST /api/chat] metrics write failed', err)
+      )
+    }
 
     const response: ChatResponse = {
       answer,
       retrievedChunks: topChunks.map((c) => c.heading),
+      timing: { messageId, retrievalTimeMs, generationTimeMs, totalTimeMs },
     }
 
     return NextResponse.json(response)

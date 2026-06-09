@@ -226,6 +226,20 @@ Trecho 3: {heading_3}
 │   │           ├── route.ts              # GET /api/faq → retorna FAQ ativa
 │   │           └── upload/
 │   │               └── route.ts          # POST /api/faq/upload → indexa
+│   ├── app/
+│   │   ├── page.tsx
+│   │   ├── layout.tsx
+│   │   ├── globals.css
+│   │   ├── dashboard/
+│   │   │   └── page.tsx                  # Rota /dashboard — métricas acadêmicas
+│   │   └── api/
+│   │       ├── chat/route.ts
+│   │       ├── faq/route.ts
+│   │       ├── faq/upload/route.ts
+│   │       └── metrics/
+│   │           ├── route.ts              # GET /api/metrics — métricas calculadas
+│   │           ├── feedback/route.ts     # POST /api/metrics/feedback
+│   │           └── session/route.ts      # POST /api/metrics/session
 │   ├── components/
 │   │   ├── ChatInterface.tsx             # Área de mensagens + input
 │   │   ├── FAQUpload.tsx                 # Upload de arquivo + status de indexação
@@ -233,12 +247,19 @@ Trecho 3: {heading_3}
 │   ├── lib/
 │   │   ├── gemini.ts                     # Cliente Gemini (LLM + embeddings)
 │   │   ├── rag.ts                        # Chunking, cosine similarity, retrieval
-│   │   └── store.ts                      # Singleton do vector store in-memory
+│   │   ├── store.ts                      # Singleton do vector store in-memory
+│   │   └── metrics-store.ts              # Singleton de métricas com persistência em JSON
+│   ├── components/
+│   │   ├── ChatInterface.tsx             # Área de mensagens + input
+│   │   ├── FAQUpload.tsx                 # Upload de arquivo + status de indexação
+│   │   ├── FAQViewer.tsx                 # Exibe FAQ em markdown formatado
+│   │   └── MetricsDashboard.tsx          # Dashboard de métricas acadêmicas
 │   └── types/
-│       └── index.ts                      # Tipos: Message, FAQChunk, FAQStatus, etc.
+│       └── index.ts                      # Tipos: Message, FAQChunk, FAQStatus, métricas, etc.
 ├── uploads/                              # Gitignored
 │   ├── current-faq.md                    # FAQ original carregada
-│   └── index.json                        # Chunks + embeddings serializados
+│   ├── index.json                        # Chunks + embeddings serializados
+│   └── metrics.json                      # Métricas de sessões e feedback
 ├── .env.local                            # GEMINI_API_KEY (gitignored)
 ├── ARQUITETURA.md                        # Este documento
 ├── next.config.ts
@@ -297,6 +318,56 @@ interface UploadResponse {
   chunkCount: number
   filename: string
 }
+
+// ChatResponse — estendida com timing a partir da Etapa 6
+interface ChatResponse {
+  answer: string
+  retrievedChunks: string[]
+  timing?: {
+    retrievalTimeMs: number   // embedding da pergunta + cosine similarity + top-K
+    generationTimeMs: number  // chamada ao Gemini Flash
+    totalTimeMs: number
+  }
+}
+```
+
+### Tipos de observabilidade (Etapa 6)
+
+```typescript
+// Feedback por mensagem individual
+interface MessageFeedback {
+  messageId: string
+  sessionId: string
+  value: 'positive' | 'negative'
+  timestamp: string
+}
+
+// Timing de cada resposta gerada
+interface ResponseTiming {
+  messageId: string
+  sessionId: string
+  retrievalTimeMs: number
+  generationTimeMs: number
+  totalTimeMs: number
+  timestamp: string
+}
+
+// Resumo de sessão enviado ao encerrar a conversa
+interface SessionSummary {
+  sessionId: string
+  startedAt: string
+  endedAt: string
+  userMessageCount: number
+  resolved?: boolean           // "Sua dúvida foi resolvida?"
+  satisfactionScore?: 1|2|3|4|5  // avaliação 1–5 estrelas (opcional)
+}
+
+// Estrutura do arquivo uploads/metrics.json
+interface MetricsFile {
+  feedbacks: MessageFeedback[]
+  timings: ResponseTiming[]
+  sessions: SessionSummary[]
+}
 ```
 
 ---
@@ -307,7 +378,11 @@ interface UploadResponse {
 |---|---|---|---|
 | `POST` | `/api/faq/upload` | `FormData { file: File }` | `UploadResponse` |
 | `GET` | `/api/faq` | — | `{ content: string, status: FAQStatus }` |
-| `POST` | `/api/chat` | `ChatRequest` | `ChatResponse` |
+| `DELETE` | `/api/faq` | — | `{ success: true }` |
+| `POST` | `/api/chat` | `ChatRequest` | `ChatResponse` (inclui `timing` na Etapa 6) |
+| `GET` | `/api/metrics` | — | Métricas calculadas (eficiência, efetividade, satisfação) |
+| `POST` | `/api/metrics/feedback` | `MessageFeedback` | `{ success: true }` |
+| `POST` | `/api/metrics/session` | `SessionSummary` | `{ success: true }` |
 
 ---
 
@@ -613,4 +688,128 @@ Total estimado: 10–14 horas de desenvolvimento
 
 ---
 
-*Documento gerado em 2026-06-01 para o TCC de OnboardBot.*
+---
+
+## 20. Observabilidade e Métricas Acadêmicas
+
+> Incremento implementado na Etapa 6 do roadmap. Sem banco de dados — persistência via `uploads/metrics.json` (mesmo padrão do `index.json`).
+
+### 20.1 Objetivo
+
+Coletar automaticamente os dados necessários para validar as hipóteses da pesquisa nas três dimensões:
+
+| Dimensão | O que mede |
+|---|---|
+| **Eficiência** | Velocidade do sistema e da interação |
+| **Efetividade** | Capacidade de resolver dúvidas |
+| **Satisfação** | Percepção do usuário sobre a ferramenta |
+
+### 20.2 O que é coletado (e o que não é)
+
+**Coletado:**
+- Tempos de resposta (retrieval, geração, total) por mensagem
+- Feedback 👍/👎 por resposta do assistente
+- Contagem de mensagens por sessão
+- Resposta à pergunta "Sua dúvida foi resolvida?" ao encerrar
+- Nota de satisfação 1–5 ao encerrar (opcional)
+
+**Não coletado:**
+- Conteúdo das mensagens (privacidade dos participantes)
+- Identificação do usuário
+- Histórico completo da conversa
+
+### 20.3 Fluxo de coleta
+
+```
+[Início da sessão]
+  sessionId gerado no cliente (crypto.randomUUID())
+  startedAt registrado
+
+[Cada resposta do assistente]
+  POST /api/chat retorna: answer + retrievedChunks + timing
+  Botões 👍 👎 exibidos abaixo da mensagem
+  Ao clicar: POST /api/metrics/feedback → gravado em metrics.json
+
+[Encerramento — botão "Encerrar conversa"]
+  Modal: "Sua dúvida foi resolvida?" + avaliação 1–5 (opcional)
+  POST /api/metrics/session → gravado em metrics.json
+  Histórico do chat limpo (nova sessão possível)
+
+[Dashboard /dashboard]
+  GET /api/metrics → lê metrics.json → calcula agregados → retorna JSON
+  MetricsDashboard.tsx exibe cards + tabela
+```
+
+### 20.4 Métricas calculadas em `GET /api/metrics`
+
+**Eficiência:**
+
+| Métrica | Cálculo |
+|---|---|
+| Tempo médio de resposta | `mean(timings[*].totalTimeMs)` |
+| Tempo médio de retrieval | `mean(timings[*].retrievalTimeMs)` |
+| Tempo médio de geração | `mean(timings[*].generationTimeMs)` |
+| Média de mensagens por sessão | `mean(sessions[*].userMessageCount)` |
+
+**Efetividade:**
+
+| Métrica | Cálculo |
+|---|---|
+| Taxa de resolução | `sessions com resolved=true` / `sessions com resolved definido` × 100 |
+| Taxa de feedback positivo | `feedbacks com value='positive'` / `total feedbacks` × 100 |
+| Taxa de feedback negativo | 100 − taxa positiva |
+| Cobertura de feedback | `sessões com ≥1 feedback` / `total sessões` × 100 |
+
+**Satisfação:**
+
+| Métrica | Cálculo |
+|---|---|
+| Nota média de satisfação | `mean(sessions[*].satisfactionScore)` (onde definido) |
+| Taxa de preenchimento do survey | `sessions com satisfactionScore` / `total sessions` × 100 |
+
+### 20.5 Persistência
+
+```
+uploads/metrics.json
+{
+  "feedbacks": [ ...MessageFeedback[] ],
+  "timings":   [ ...ResponseTiming[]  ],
+  "sessions":  [ ...SessionSummary[]  ]
+}
+```
+
+- Arquivo criado automaticamente na primeira interação
+- Append-only: cada evento é adicionado ao array correspondente
+- Tamanho estimado: ~200 bytes por sessão — adequado para 500+ sessões de pesquisa
+- Gitignored (junto com `current-faq.md` e `index.json`)
+
+### 20.6 Novo componente — `metrics-store.ts`
+
+Singleton análogo ao `store.ts`, responsável por:
+- Carregar `metrics.json` do disco na primeira leitura
+- Fornecer métodos `appendFeedback`, `appendTiming`, `appendSession`
+- Persistir cada append imediatamente (write-through, sem buffer)
+- Retornar os dados brutos para que a route handler calcule os agregados
+
+### 20.7 Dashboard `/dashboard`
+
+```
+┌─────────────────┬─────────────────┬─────────────────┐
+│  Total sessões  │  Msgs/sessão    │  Tempo resposta  │
+│      12         │     4.2         │    2.3s          │
+├─────────────────┼─────────────────┼─────────────────┤
+│  Taxa resolução │  Feedback +     │  Satisfação      │
+│     78%         │    83%          │   4.1/5          │
+└─────────────────┴─────────────────┴─────────────────┘
+
+Sessões recentes:
+ID    │ Data       │ Msgs │ Resolvida │ Satisfação │ Feedbacks
+──────┼────────────┼──────┼───────────┼────────────┼──────────
+a3f1  │ 2026-06-08 │  5   │ Sim       │ ★★★★☆      │ 2 👍 0 👎
+```
+
+Acesso via link "Métricas" no header da aplicação principal.
+
+---
+
+*Documento gerado em 2026-06-01 para o TCC de OnboardBot. Seção 20 adicionada em 2026-06-08.*

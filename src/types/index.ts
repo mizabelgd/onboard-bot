@@ -6,6 +6,7 @@ export interface Message {
   content: string
   timestamp: string
   isError?: boolean
+  metricId?: string  // ID do servidor para vincular ao feedback
 }
 
 export interface FAQChunk {
@@ -24,11 +25,49 @@ export interface FAQStatus {
 export interface ChatRequest {
   message: string
   history: Message[]
+  sessionId?: string
 }
 
 export interface ChatResponse {
   answer: string
   retrievedChunks: string[]
+  timing?: {
+    messageId: string
+    retrievalTimeMs: number
+    generationTimeMs: number
+    totalTimeMs: number
+  }
+}
+
+export interface MessageFeedback {
+  messageId: string
+  sessionId: string
+  value: 'positive' | 'negative'
+  timestamp: string
+}
+
+export interface ResponseTiming {
+  messageId: string
+  sessionId: string
+  retrievalTimeMs: number
+  generationTimeMs: number
+  totalTimeMs: number
+  timestamp: string
+}
+
+export interface SessionSummary {
+  sessionId: string
+  startedAt: string
+  endedAt: string
+  userMessageCount: number
+  resolved?: boolean
+  satisfactionScore?: 1 | 2 | 3 | 4 | 5
+}
+
+export interface MetricsFile {
+  feedbacks: MessageFeedback[]
+  timings: ResponseTiming[]
+  sessions: SessionSummary[]
 }
 
 export interface UploadResponse {
