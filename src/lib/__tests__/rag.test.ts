@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { parseMarkdownToChunks, cosineSimilarity, retrieveTopK } from '@/lib/rag'
-import type { FAQChunk } from '@/types'
 
-vi.mock('@/lib/gemini', () => ({
-  generateEmbedding: vi.fn(),
+// Mock dos módulos que retrieveTopK delega
+vi.mock('@/lib/embeddings', () => ({ generateEmbedding: vi.fn() }))
+vi.mock('@/lib/store', () => ({
+  faqStore: { query: vi.fn(), set: vi.fn(), getStatus: vi.fn(), clear: vi.fn() },
 }))
 
-import { generateEmbedding } from '@/lib/gemini'
+import { generateEmbedding } from '@/lib/embeddings'
+import { faqStore } from '@/lib/store'
+
 const mockEmbed = vi.mocked(generateEmbedding)
+const mockQuery = vi.mocked(faqStore.query)
 
 // ---------------------------------------------------------------------------
 // parseMarkdownToChunks
@@ -102,51 +106,49 @@ describe('cosineSimilarity', () => {
 // ---------------------------------------------------------------------------
 
 describe('retrieveTopK', () => {
-  const makeChunk = (heading: string, embedding: number[]): FAQChunk => ({
-    heading,
-    text: `${heading}\n\nConteúdo.`,
-    embedding,
-  })
-
   beforeEach(() => {
     mockEmbed.mockReset()
+    mockQuery.mockReset()
   })
 
-  it('retorna array vazio quando o store está vazio', async () => {
-    const result = await retrieveTopK('qualquer pergunta', [], 3)
-    expect(result).toEqual([])
-    expect(mockEmbed).not.toHaveBeenCalled()
-  })
-
-  it('retorna os k chunks mais similares ordenados por score', async () => {
-    const store = [
-      makeChunk('Irrelevante', [0, 1, 0]),   // similaridade baixa com a query
-      makeChunk('Alvo',        [1, 0, 0]),   // similaridade alta com a query
-      makeChunk('Mediano',     [0.5, 0.5, 0]), // similaridade média
-    ]
-    // Query similar ao chunk "Alvo"
+  it('chama generateEmbedding com a query fornecida', async () => {
     mockEmbed.mockResolvedValue([1, 0, 0])
+    mockQuery.mockResolvedValue([])
 
-    const result = await retrieveTopK('pergunta', store, 2)
+    await retrieveTopK('minha pergunta', 3)
 
-    expect(result).toHaveLength(2)
-    expect(result[0].heading).toBe('Alvo')
+    expect(mockEmbed).toHaveBeenCalledWith('minha pergunta')
   })
 
-  it('retorna todos quando k é maior que o número de chunks', async () => {
-    const store = [makeChunk('A', [1, 0]), makeChunk('B', [0, 1])]
-    mockEmbed.mockResolvedValue([1, 0])
+  it('delega a busca ao faqStore.query com o embedding e k corretos', async () => {
+    const embedding = [0.1, 0.2, 0.3]
+    mockEmbed.mockResolvedValue(embedding)
+    mockQuery.mockResolvedValue([])
 
-    const result = await retrieveTopK('pergunta', store, 10)
-    expect(result).toHaveLength(2)
+    await retrieveTopK('pergunta', 5)
+
+    expect(mockQuery).toHaveBeenCalledWith(embedding, 5)
   })
 
-  it('gera embedding da query exatamente uma vez', async () => {
-    const store = [makeChunk('A', [1, 0])]
+  it('retorna os chunks devolvidos pelo faqStore.query', async () => {
     mockEmbed.mockResolvedValue([1, 0])
+    const expected = [
+      { heading: 'Alvo', text: 'Alvo\n\nConteúdo.' },
+      { heading: 'Outro', text: 'Outro\n\nConteúdo.' },
+    ]
+    mockQuery.mockResolvedValue(expected)
 
-    await retrieveTopK('pergunta', store, 1)
+    const result = await retrieveTopK('query', 2)
+
+    expect(result).toEqual(expected)
+  })
+
+  it('gera o embedding da query exatamente uma vez por chamada', async () => {
+    mockEmbed.mockResolvedValue([1, 0])
+    mockQuery.mockResolvedValue([])
+
+    await retrieveTopK('pergunta', 3)
+
     expect(mockEmbed).toHaveBeenCalledTimes(1)
-    expect(mockEmbed).toHaveBeenCalledWith('pergunta')
   })
 })

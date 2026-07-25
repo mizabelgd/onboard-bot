@@ -12,7 +12,7 @@ export interface Message {
 export interface FAQChunk {
   heading: string
   text: string       // heading + content concatenados — vai no prompt
-  embedding: number[] // 768 dimensões do text-embedding-004
+  embedding: number[] // 384 dimensões — all-MiniLM-L6-v2
 }
 
 export interface FAQStatus {

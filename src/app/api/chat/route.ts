@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { faqStore, initStoreFromDisk } from '@/lib/store'
+import { faqStore } from '@/lib/store'
 import { metricsStore } from '@/lib/metrics-store'
 import { retrieveTopK } from '@/lib/rag'
-import { generateAnswer } from '@/lib/gemini'
+import { generateAnswer } from '@/lib/llm'
 import type { ChatRequest, ChatResponse, Message, ResponseTiming } from '@/types'
 
 const HISTORY_LIMIT = parseInt(process.env.HISTORY_LIMIT ?? '6', 10)
@@ -57,9 +57,9 @@ Seja direto e objetivo.`
  *
  * Executa o pipeline RAG completo para uma mensagem do usuário:
  *   1. Valida a mensagem e o estado do store
- *   2. Recupera os top-3 chunks semanticamente mais relevantes (com timing)
+ *   2. Recupera os top-k chunks mais relevantes via ChromaDB (com timing)
  *   3. Monta o prompt RAG com contexto + histórico + pergunta
- *   4. Envia ao Gemini Flash e retorna a resposta (com timing)
+ *   4. Envia ao Ollama (phi3) e retorna a resposta (com timing)
  *   5. Persiste ResponseTiming em metrics.json se sessionId fornecido
  *
  * @param request JSON { message, history, sessionId? }
@@ -67,7 +67,6 @@ Seja direto e objetivo.`
  */
 export async function POST(request: NextRequest) {
   try {
-    await initStoreFromDisk()
     const body = (await request.json()) as ChatRequest
     const { message, history = [], sessionId } = body
 
@@ -75,8 +74,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Mensagem não pode ser vazia.' }, { status: 400 })
     }
 
-    const chunks = faqStore.get()
-    if (chunks.length === 0) {
+    const status = await faqStore.getStatus()
+    if (!status.loaded) {
       return NextResponse.json(
         { error: 'Nenhuma FAQ carregada. Faça o upload de um arquivo .md primeiro.' },
         { status: 400 }
@@ -84,7 +83,7 @@ export async function POST(request: NextRequest) {
     }
 
     const retrievalStart = Date.now()
-    const topChunks = await retrieveTopK(message, chunks, RAG_TOP_K)
+    const topChunks = await retrieveTopK(message, RAG_TOP_K)
     const retrievalTimeMs = Date.now() - retrievalStart
 
     const prompt = buildRagPrompt(topChunks, history, message)

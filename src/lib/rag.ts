@@ -1,4 +1,5 @@
-import { generateEmbedding } from './gemini'
+import { generateEmbedding } from './embeddings'
+import { faqStore } from './store'
 import type { FAQChunk } from '../types'
 
 /**
@@ -33,6 +34,7 @@ export function parseMarkdownToChunks(md: string): Omit<FAQChunk, 'embedding'>[]
 /**
  * Calcula a similaridade de cosseno entre dois vetores de embedding.
  * Retorna valores entre -1 (opostos) e 1 (idênticos); retorna 0 se algum vetor for nulo.
+ * Mantido para uso em avaliações e testes — o retrieval em produção usa o ChromaDB.
  */
 export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0
@@ -50,26 +52,17 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 }
 
 /**
- * Recupera os k chunks mais relevantes para a query usando similaridade semântica.
- * Gera o embedding da query, compara com todos os chunks do store e retorna os top-k
- * ordenados por similaridade decrescente.
+ * Recupera os k chunks mais relevantes para a query usando ChromaDB.
+ * Gera o embedding da query via all-MiniLM-L6-v2 e delega a busca por
+ * similaridade de cosseno ao ChromaDB.
  *
- * @param query  Pergunta do usuário em texto livre.
- * @param store  Chunks indexados com embeddings pré-calculados.
- * @param k      Número de chunks a retornar (recomendado: 3).
+ * @param query Pergunta do usuário em texto livre.
+ * @param k     Número de chunks a retornar (recomendado: 3).
  */
 export async function retrieveTopK(
   query: string,
-  store: FAQChunk[],
   k: number
-): Promise<FAQChunk[]> {
-  if (store.length === 0) return []
-
+): Promise<Array<{ heading: string; text: string }>> {
   const queryEmbedding = await generateEmbedding(query)
-
-  return store
-    .map((chunk) => ({ chunk, score: cosineSimilarity(queryEmbedding, chunk.embedding) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, k)
-    .map(({ chunk }) => chunk)
+  return faqStore.query(queryEmbedding, k)
 }

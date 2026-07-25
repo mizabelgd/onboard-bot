@@ -30,7 +30,7 @@ export default function Home() {
         </div>
         <h1 className="text-sm font-semibold text-neutral-900">OnboardBot</h1>
         <span className="text-xs text-neutral-500 bg-neutral-100 rounded-full px-2.5 py-0.5 border border-neutral-200">
-          FAQ · RAG · Gemini
+          FAQ · RAG · Ollama
         </span>
         <div className="flex-1" />
         <Link

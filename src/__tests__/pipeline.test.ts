@@ -1,24 +1,23 @@
 /**
- * Testes de integração do pipeline RAG — Etapa 4 do roadmap.
+ * Testes de integração do pipeline RAG.
  *
- * Todos os cenários usam mocks para generateEmbedding e generateAnswer,
- * eliminando chamadas reais à API do Gemini durante os testes.
+ * Todos os cenários usam mocks para generateEmbedding (embeddings locais),
+ * generateAnswer (Ollama) e faqStore (ChromaDB), eliminando dependências
+ * externas nos testes.
  *
  * Cenários cobertos:
  *   1. Upload válido → indexação → chat completo
  *   2. Troca de FAQ durante sessão ativa
  *   3. Pergunta fora do FAQ (resposta negativa do modelo)
  *   4. Chunks recuperados aparecem no response do chat
- *   5. Upload inválido — extensão errada
- *   6. Upload inválido — sem headings ##
- *   7. Upload inválido — arquivo vazio
- *   8. Chat sem FAQ carregada (store vazio)
- *   9. Restart do servidor — re-indexação a partir de index.json
+ *   5. Upload inválido — extensão errada / sem headings / arquivo vazio
+ *   6. Chat sem FAQ carregada / mensagem vazia
+ *   7. GET /api/faq — status antes e após upload
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
-import { faqStore, initStoreFromDisk } from '@/lib/store'
+import type { FAQChunk } from '@/types'
 
 // --- Mocks hoistados pelo Vitest (executados antes dos imports) ---
 
@@ -28,15 +27,31 @@ vi.mock('fs/promises', () => ({
   readFile: vi.fn().mockRejectedValue(
     Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' })
   ),
+  unlink: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/lib/gemini', () => ({
+vi.mock('@/lib/embeddings', () => ({
   generateEmbedding: vi.fn(),
+}))
+
+vi.mock('@/lib/llm', () => ({
   generateAnswer: vi.fn(),
 }))
 
+// Mock do store: substitui o ChromaDB por uma implementação in-memory controlada pelos testes
+vi.mock('@/lib/store', () => ({
+  faqStore: {
+    set: vi.fn(),
+    getStatus: vi.fn(),
+    clear: vi.fn(),
+    query: vi.fn(),
+  },
+}))
+
 import { readFile } from 'fs/promises'
-import { generateEmbedding, generateAnswer } from '@/lib/gemini'
+import { generateEmbedding } from '@/lib/embeddings'
+import { generateAnswer } from '@/lib/llm'
+import { faqStore } from '@/lib/store'
 import { POST as uploadPOST } from '@/app/api/faq/upload/route'
 import { GET as faqGET } from '@/app/api/faq/route'
 import { POST as chatPOST } from '@/app/api/chat/route'
@@ -44,6 +59,10 @@ import { POST as chatPOST } from '@/app/api/chat/route'
 const mockEmbed = vi.mocked(generateEmbedding)
 const mockAnswer = vi.mocked(generateAnswer)
 const mockReadFile = vi.mocked(readFile)
+const mockSet = vi.mocked(faqStore.set)
+const mockGetStatus = vi.mocked(faqStore.getStatus)
+const mockClear = vi.mocked(faqStore.clear)
+const mockQuery = vi.mocked(faqStore.query)
 
 // --- Fixtures ---
 
@@ -82,7 +101,11 @@ Instale o Cisco AnyConnect e use vpn.nexus.com.br.`
 const RESPOSTA_MODELO = 'Para configurar o ambiente local, execute npm install...'
 const RESPOSTA_FORA_FAQ =
   'Não encontrei essa informação no FAQ atual. Por favor, consulte seu time ou supervisor.'
-const EMBEDDING_FIXO = new Array(768).fill(0.1)
+const EMBEDDING_FIXO = new Array(384).fill(0.1)
+
+// Estado in-memory que o mock do store controla
+let _storeChunks: Array<{ heading: string; text: string }> = []
+let _storeFilename = ''
 
 // --- Helpers ---
 
@@ -106,9 +129,32 @@ function makeChatRequest(message: string, history = []): NextRequest {
 // --- Setup ---
 
 beforeEach(() => {
-  faqStore.clear()
-  // resetAllMocks limpa histórico E fila de mockResolvedValueOnce — evita vazamentos entre testes
+  _storeChunks = []
+  _storeFilename = ''
   vi.resetAllMocks()
+
+  // Implementação in-memory do store para cada teste
+  mockSet.mockImplementation(async (chunks: FAQChunk[], filename: string) => {
+    _storeChunks = chunks.map((c) => ({ heading: c.heading, text: c.text }))
+    _storeFilename = filename
+  })
+  mockGetStatus.mockImplementation(async () => {
+    if (_storeChunks.length === 0) return { loaded: false }
+    return {
+      loaded: true,
+      filename: _storeFilename,
+      indexedAt: '2026-01-01T00:00:00.000Z',
+      chunkCount: _storeChunks.length,
+    }
+  })
+  mockClear.mockImplementation(async () => {
+    _storeChunks = []
+    _storeFilename = ''
+  })
+  mockQuery.mockImplementation(async (_embedding: number[], k: number) =>
+    _storeChunks.slice(0, k)
+  )
+
   mockEmbed.mockResolvedValue(EMBEDDING_FIXO)
   mockAnswer.mockResolvedValue(RESPOSTA_MODELO)
   mockReadFile.mockRejectedValue(
@@ -134,8 +180,8 @@ describe('Cenário 1: upload → indexação → chat completo', () => {
   it('upload indexa os chunks corretamente no store', async () => {
     await uploadPOST(makeUploadRequest(FAQ_VALIDA))
 
-    expect(faqStore.get()).toHaveLength(3)
-    expect(faqStore.getStatus().loaded).toBe(true)
+    expect(_storeChunks).toHaveLength(3)
+    expect(await faqStore.getStatus()).toMatchObject({ loaded: true })
   })
 
   it('generateEmbedding é chamado uma vez por chunk durante a indexação', async () => {
@@ -164,13 +210,14 @@ describe('Cenário 1: upload → indexação → chat completo', () => {
 describe('Cenário 2: troca de FAQ durante sessão ativa', () => {
   it('novo upload substitui a FAQ anterior no store', async () => {
     await uploadPOST(makeUploadRequest(FAQ_VALIDA))
-    expect(faqStore.get()).toHaveLength(3)
+    expect(_storeChunks).toHaveLength(3)
 
     await uploadPOST(makeUploadRequest(FAQ_NOVA, 'faq-nova.md'))
 
-    expect(faqStore.get()).toHaveLength(5)
-    expect(faqStore.getStatus().filename).toBe('faq-nova.md')
-    expect(faqStore.getStatus().chunkCount).toBe(5)
+    expect(_storeChunks).toHaveLength(5)
+    const status = await faqStore.getStatus()
+    expect(status.filename).toBe('faq-nova.md')
+    expect(status.chunkCount).toBe(5)
   })
 
   it('após troca, chat usa os chunks da nova FAQ', async () => {
@@ -182,8 +229,8 @@ describe('Cenário 2: troca de FAQ durante sessão ativa', () => {
 
     expect(res.status).toBe(200)
     expect(body.retrievedChunks).toBeDefined()
-    // Os headings devem ser da nova FAQ
-    const headingsDisponiveis = faqStore.get().map((c) => c.heading)
+    // Os headings devem pertencer à nova FAQ
+    const headingsDisponiveis = _storeChunks.map((c) => c.heading)
     body.retrievedChunks.forEach((heading: string) => {
       expect(headingsDisponiveis).toContain(heading)
     })
@@ -218,10 +265,11 @@ describe('Cenário 4: chunks recuperados por pergunta', () => {
     const res = await chatPOST(makeChatRequest('Como abrir um PR?'))
     const { retrievedChunks } = await res.json()
 
-    const headingsValidos = ['Como solicitar acesso ao Git?',
+    const headingsValidos = [
+      'Como solicitar acesso ao Git?',
       'Como configurar o ambiente local?',
-      'Como abrir um Pull Request?']
-
+      'Como abrir um Pull Request?',
+    ]
     retrievedChunks.forEach((heading: string) => {
       expect(headingsValidos).toContain(heading)
     })
@@ -289,11 +337,11 @@ describe('Cenário 5: upload inválido', () => {
 
   it('não modifica o store quando o upload falha por validação', async () => {
     await uploadPOST(makeUploadRequest(FAQ_VALIDA))
-    const chunksAntes = faqStore.get().length
+    const chunksAntes = _storeChunks.length
 
     await uploadPOST(makeUploadRequest('Sem headings'))
 
-    expect(faqStore.get()).toHaveLength(chunksAntes)
+    expect(_storeChunks).toHaveLength(chunksAntes)
   })
 })
 
@@ -331,7 +379,7 @@ describe('Cenário 6: chat sem FAQ carregada', () => {
 })
 
 // ===========================================================================
-// Cenário extra — GET /api/faq
+// Cenário 7 — GET /api/faq
 // ===========================================================================
 
 describe('GET /api/faq', () => {
@@ -352,72 +400,5 @@ describe('GET /api/faq', () => {
     expect(body.status.loaded).toBe(true)
     expect(body.status.chunkCount).toBe(3)
     expect(body.status.filename).toBe('faq.md')
-  })
-})
-
-// ===========================================================================
-// Cenário 7 — Restart do servidor (re-indexação a partir de index.json)
-// ===========================================================================
-
-describe('Cenário 7: restart do servidor — re-indexação a partir de index.json', () => {
-  const SAVED_STATE = {
-    chunks: [
-      {
-        heading: 'Como fazer deploy?',
-        text: 'Como fazer deploy?\n\nExecute o workflow de deploy no GitHub Actions.',
-        embedding: EMBEDDING_FIXO,
-      },
-    ],
-    filename: 'faq-salva.md',
-    indexedAt: '2026-06-01T00:00:00.000Z',
-  }
-
-  it('carrega chunks do index.json quando o store está vazio', async () => {
-    mockReadFile.mockResolvedValueOnce(JSON.stringify(SAVED_STATE))
-
-    await initStoreFromDisk()
-
-    expect(faqStore.get()).toHaveLength(1)
-    expect(faqStore.getStatus().loaded).toBe(true)
-    expect(faqStore.getStatus().filename).toBe('faq-salva.md')
-    expect(faqStore.getStatus().indexedAt).toBe('2026-06-01T00:00:00.000Z')
-  })
-
-  it('não sobrescreve FAQ ativa já carregada em memória', async () => {
-    await uploadPOST(makeUploadRequest(FAQ_VALIDA))
-    const chunksAntes = faqStore.get().length
-
-    mockReadFile.mockResolvedValueOnce(JSON.stringify(SAVED_STATE))
-    await initStoreFromDisk()
-
-    expect(faqStore.get()).toHaveLength(chunksAntes)
-    expect(faqStore.getStatus().filename).toBe('faq.md')
-  })
-
-  it('mantém store vazio se index.json não existir', async () => {
-    // mockReadFile já rejeita com ENOENT pelo beforeEach
-    await initStoreFromDisk()
-
-    expect(faqStore.get()).toEqual([])
-    expect(faqStore.getStatus().loaded).toBe(false)
-  })
-
-  it('ignora index.json corrompido sem lançar erro', async () => {
-    mockReadFile.mockResolvedValueOnce('{ json: inválido }')
-
-    await expect(initStoreFromDisk()).resolves.toBeUndefined()
-    expect(faqStore.get()).toEqual([])
-  })
-
-  it('após restart simulado, chat responde com a FAQ do index.json sem novo upload', async () => {
-    // Simula restart: store vazio mas index.json existe no disco
-    mockReadFile.mockResolvedValueOnce(JSON.stringify(SAVED_STATE))
-
-    const res = await chatPOST(makeChatRequest('Como fazer deploy?'))
-    const body = await res.json()
-
-    expect(res.status).toBe(200)
-    expect(body.answer).toBe(RESPOSTA_MODELO)
-    expect(body.retrievedChunks).toContain('Como fazer deploy?')
   })
 })

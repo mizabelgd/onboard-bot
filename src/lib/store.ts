@@ -1,67 +1,143 @@
-import { readFile } from 'fs/promises'
-import { join } from 'path'
+import { ChromaClient, type Collection } from 'chromadb'
 import type { FAQChunk, FAQStatus } from '../types'
 
-interface StoreState {
-  chunks: FAQChunk[]
-  filename: string
-  indexedAt: string
+const CHROMA_URL = process.env.CHROMA_URL ?? 'http://localhost:8000'
+const COLLECTION_NAME = 'faq-embeddings'
+
+// Embedding function no-op: todos os embeddings são fornecidos explicitamente
+// pelo @huggingface/transformers. Esta função nunca é chamada pelo ChromaDB,
+// mas é exigida pela API para que a coleção não tente usar DefaultEmbeddingFunction.
+const noOpEmbeddingFunction = {
+  generate: async (_texts: string[]) => _texts.map(() => [] as number[]),
 }
 
-const INDEX_FILE = join(process.cwd(), 'uploads', 'index.json')
+// Singleton que sobrevive ao HMR do Next.js em desenvolvimento
+const g = globalThis as typeof globalThis & {
+  __chromaClient: ChromaClient | null
+  __chromaCollection: Collection | null
+}
 
-// Persiste no globalThis para sobreviver ao HMR do Next.js em desenvolvimento
-const g = globalThis as typeof globalThis & { __faqStore: StoreState | null }
-
-if (g.__faqStore === undefined) {
-  g.__faqStore = null
+if (g.__chromaClient === undefined) {
+  g.__chromaClient = null
+  g.__chromaCollection = null
 }
 
 /**
- * Singleton do vector store em memória.
- * Mantém os chunks indexados da FAQ ativa durante o ciclo de vida do servidor.
- * Um novo upload substitui completamente o estado anterior via `set`.
+ * Retorna (ou inicializa) a coleção ChromaDB com espaço de cosseno.
+ * O espaço de distância é definido na criação e não pode ser alterado depois —
+ * o volume do Docker garante persistência entre reinicializações.
+ */
+async function getCollection(): Promise<Collection> {
+  if (!g.__chromaClient) {
+    const url = new URL(CHROMA_URL)
+    g.__chromaClient = new ChromaClient({
+      host: url.hostname,
+      port: parseInt(url.port || '8000'),
+      ssl: url.protocol === 'https:',
+    })
+  }
+  if (!g.__chromaCollection) {
+    g.__chromaCollection = await g.__chromaClient.getOrCreateCollection({
+      name: COLLECTION_NAME,
+      metadata: { 'hnsw:space': 'cosine' },
+      embeddingFunction: noOpEmbeddingFunction,
+    })
+  }
+  return g.__chromaCollection
+}
+
+/**
+ * Store da FAQ baseado em ChromaDB.
+ * Substitui o store in-memory anterior — os embeddings são persistidos pelo ChromaDB
+ * e sobrevivem a reinicializações do servidor sem re-indexação.
  */
 export const faqStore = {
-  /** Substitui o índice inteiro com os novos chunks e registra metadados. */
-  set(chunks: FAQChunk[], filename: string): void {
-    g.__faqStore = { chunks, filename, indexedAt: new Date().toISOString() }
+  /**
+   * Substitui o índice inteiro: remove todos os vetores existentes e insere os novos.
+   * Os metadados filename e indexedAt são armazenados em cada documento.
+   */
+  async set(chunks: FAQChunk[], filename: string): Promise<void> {
+    const col = await getCollection()
+    const indexedAt = new Date().toISOString()
+
+    // Remove tudo antes de inserir para garantir índice limpo
+    const existing = await col.get()
+    if (existing.ids.length > 0) {
+      await col.delete({ ids: existing.ids })
+    }
+
+    const ids = chunks.map((_, i) => `chunk_${i}`)
+    const embeddings = chunks.map((c) => c.embedding)
+    const documents = chunks.map((c) => c.text)
+    const metadatas = chunks.map((c) => ({ heading: c.heading, filename, indexedAt }))
+
+    await col.add({ ids, embeddings, documents, metadatas })
   },
 
-  /** Retorna os chunks indexados, ou array vazio se nenhuma FAQ foi carregada. */
-  get(): FAQChunk[] {
-    return g.__faqStore?.chunks ?? []
-  },
+  /**
+   * Retorna metadados da FAQ ativa (filename, indexedAt, chunkCount).
+   * Se a coleção estiver vazia, retorna { loaded: false }.
+   */
+  async getStatus(): Promise<FAQStatus> {
+    try {
+      const col = await getCollection()
+      const count = await col.count()
+      if (count === 0) return { loaded: false }
 
-  /** Retorna metadados da FAQ ativa (filename, indexedAt, chunkCount). */
-  getStatus(): FAQStatus {
-    if (!g.__faqStore) return { loaded: false }
-    return {
-      loaded: true,
-      filename: g.__faqStore.filename,
-      indexedAt: g.__faqStore.indexedAt,
-      chunkCount: g.__faqStore.chunks.length,
+      const sample = await col.get({ limit: 1 })
+      const meta = sample.metadatas?.[0] as { heading: string; filename: string; indexedAt: string } | undefined
+
+      return {
+        loaded: true,
+        filename: meta?.filename,
+        indexedAt: meta?.indexedAt,
+        chunkCount: count,
+      }
+    } catch {
+      return { loaded: false }
     }
   },
 
-  /** Remove a FAQ ativa do store. */
-  clear(): void {
-    g.__faqStore = null
+  /**
+   * Remove todos os documentos da coleção e reseta o singleton.
+   */
+  async clear(): Promise<void> {
+    try {
+      const col = await getCollection()
+      const all = await col.get()
+      if (all.ids.length > 0) {
+        await col.delete({ ids: all.ids })
+      }
+    } catch {
+      // ignora se a coleção ainda não existir
+    }
+    // força re-obtenção da coleção na próxima chamada
+    g.__chromaCollection = null
   },
-}
 
-/**
- * Tenta carregar o índice do disco (uploads/index.json) se o store estiver vazio.
- * Chamada no início de cada request para recuperar o índice após restart do servidor,
- * evitando a necessidade de re-fazer o upload.
- */
-export async function initStoreFromDisk(): Promise<void> {
-  if (g.__faqStore !== null) return
-  try {
-    const raw = await readFile(INDEX_FILE, 'utf-8')
-    const state = JSON.parse(raw) as StoreState
-    g.__faqStore = state
-  } catch {
-    // index.json não existe ou está corrompido — store permanece vazio
-  }
+  /**
+   * Consulta os k chunks mais similares ao embedding fornecido.
+   * A similaridade de cosseno é calculada pelo ChromaDB (configurado na criação da coleção).
+   *
+   * @param queryEmbedding Vetor de 384 dimensões da pergunta.
+   * @param k Número de resultados a retornar.
+   */
+  async query(
+    queryEmbedding: number[],
+    k: number
+  ): Promise<Array<{ heading: string; text: string }>> {
+    const col = await getCollection()
+    const results = await col.query({
+      queryEmbeddings: [queryEmbedding],
+      nResults: k,
+    })
+
+    const metadatas = results.metadatas[0] as Array<{ heading: string } | null>
+    const documents = results.documents[0]
+
+    return metadatas.map((meta, i) => ({
+      heading: meta?.heading ?? '',
+      text: documents[i] ?? '',
+    }))
+  },
 }

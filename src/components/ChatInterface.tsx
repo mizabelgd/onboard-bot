@@ -26,7 +26,7 @@ function friendlyError(status: number, serverMsg: string): string {
     return 'Nenhuma FAQ carregada ainda. Faça o upload de um arquivo .md no painel ao lado para começar.'
   }
   if (status === 500) {
-    return 'Ocorreu um erro no servidor. Se o problema persistir, verifique se a GEMINI_API_KEY está configurada corretamente.'
+    return 'Ocorreu um erro no servidor. Verifique se o Ollama está rodando e o modelo phi3 foi baixado.'
   }
   return serverMsg || 'Erro ao obter resposta.'
 }

@@ -1,0 +1,41 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./uploads:/app/uploads
+      # Cache dos modelos HuggingFace — evita re-download a cada reinicialização
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=phi3
+      - CHROMA_URL=http://chromadb:8000
+      - RAG_TOP_K=3
+      - HISTORY_LIMIT=6
+    depends_on:
+      - ollama
+      - chromadb
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      # Modelos Ollama persistidos entre reinicializações
+      - ollama-models:/root/.ollama
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+
+volumes:
+  ollama-models:
+  chroma-data:
+  hf-cache:

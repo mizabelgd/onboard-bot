@@ -15,7 +15,7 @@ O OnboardBot permite que uma equipe carregue um arquivo FAQ em Markdown. A parti
 1. Usuário faz upload de um `FAQ.md`
 2. O sistema divide o conteúdo em chunks e gera embeddings para cada um
 3. Ao receber uma pergunta, recupera os top-3 chunks semanticamente mais relevantes
-4. Envia os chunks + pergunta ao Gemini Flash, que gera a resposta
+4. Envia os chunks + pergunta ao Ollama phi3 (local), que gera a resposta
 5. Um novo upload substitui a base de conhecimento ativa
 
 **O chatbot é conversacional.** O histórico da sessão é mantido no cliente (React state) e as últimas 6 mensagens são enviadas junto com cada pergunta. Isso permite perguntas de acompanhamento naturais — "pode detalhar?", "e no Windows?", "como faço isso para o outro ambiente?" — sem que o usuário precise repetir o contexto. O histórico não é persistido: ao recarregar a página, a conversa começa do zero (a FAQ carregada é mantida).
@@ -27,12 +27,13 @@ O OnboardBot permite que uma equipe carregue um arquivo FAQ em Markdown. A parti
 | Camada | Tecnologia |
 |---|---|
 | Frontend / Backend | Next.js 16 + React 19 + Tailwind CSS v4 |
-| LLM | Google Gemini Flash (`gemini-2.5-flash`) |
-| Embeddings | Google Gemini (`gemini-embedding-2`) |
-| Vector Store | Array in-memory (TypeScript puro) |
+| LLM | Ollama (`phi3`) — execução local, zero custo |
+| Embeddings | `all-MiniLM-L6-v2` via `@huggingface/transformers` (ONNX, 384 dims) |
+| Vector Store | ChromaDB — banco vetorial persistente |
 | Markdown | `react-markdown` |
+| Orquestração | Docker Compose |
 
-Sem banco de dados. Sem LangChain. Sem banco vetorial. Uma única API key.
+Sem API key. Sem serviços externos. Execução 100% local.
 
 ---
 
@@ -40,29 +41,47 @@ Sem banco de dados. Sem LangChain. Sem banco vetorial. Uma única API key.
 
 ### Pré-requisitos
 
-- Node.js 20+
-- Conta no [Google AI Studio](https://aistudio.google.com/app/apikey) para obter a chave da API Gemini (gratuito)
+- [Docker](https://docs.docker.com/get-docker/) e Docker Compose
+- (Opcional para desenvolvimento local sem Docker) Node.js 20+, Ollama e ChromaDB instalados
 
-### Instalação
+### Execução com Docker (recomendado)
 
 ```bash
 git clone <repo>
 cd onboard-bot
-npm install
-npm install @google/generative-ai react-markdown
+
+# Primeira execução: baixa o modelo phi3 e sobe todos os serviços
+make docker-setup
 ```
 
-### Variáveis de ambiente
+Acesse [http://localhost:3000](http://localhost:3000).
+
+> **Nota:** Na primeira execução, o modelo `all-MiniLM-L6-v2` (~90 MB) é baixado automaticamente do HuggingFace Hub quando a primeira FAQ é enviada. O modelo fica em cache no volume `hf-cache` para execuções futuras.
+
+### Execução local (sem Docker)
+
+Instale e inicie o [Ollama](https://ollama.ai) e o [ChromaDB](https://docs.trychroma.com) localmente:
+
+```bash
+# Ollama
+ollama pull phi3
+ollama serve
+
+# ChromaDB
+pip install chromadb
+chroma run --host 0.0.0.0 --port 8000
+```
 
 Crie o arquivo `.env.local` na raiz:
 
 ```bash
-GEMINI_API_KEY=sua_chave_aqui
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=phi3
+CHROMA_URL=http://localhost:8000
 ```
 
-### Rodar localmente
-
 ```bash
+npm install
 npm run dev
 ```
 
@@ -86,13 +105,15 @@ src/
 │   ├── FAQUpload.tsx
 │   └── FAQViewer.tsx
 ├── lib/
-│   ├── gemini.ts                   # Cliente LLM + embeddings
+│   ├── embeddings.ts               # all-MiniLM-L6-v2 via @huggingface/transformers (ONNX)
+│   ├── llm.ts                      # Ollama HTTP API (phi3)
 │   ├── rag.ts                      # Chunking, cosine similarity, retrieval
-│   └── store.ts                    # Singleton do vector store
+│   ├── store.ts                    # Singleton ChromaDB (client + collection)
+│   └── metrics-store.ts            # Singleton de métricas (JSON)
 └── types/index.ts
 uploads/
 ├── current-faq.md                  # FAQ ativa (gitignored)
-└── index.json                      # Índice serializado (gitignored)
+└── metrics.json                    # Métricas de sessões (gitignored)
 ```
 
 Documentação de arquitetura completa em [ARQUITETURA.md](./ARQUITETURA.md).
@@ -150,15 +171,16 @@ Para usá-la, faça upload do arquivo pela interface do OnboardBot.
 ### Etapa 1 — Infraestrutura RAG `lib/`
 > Estimativa: 2–3h
 
-- [x] Criar `src/lib/gemini.ts`
-  - Função `generateEmbedding(text: string): Promise<number[]>` — chama `text-embedding-004`
-  - Função `generateAnswer(prompt: string): Promise<string>` — chama `gemini-1.5-flash`
+- [x] Criar `src/lib/embeddings.ts`
+  - Função `generateEmbedding(text: string): Promise<number[]>` — `all-MiniLM-L6-v2` via ONNX (384 dims)
+- [x] Criar `src/lib/llm.ts`
+  - Função `generateAnswer(prompt: string): Promise<string>` — Ollama HTTP API (phi3)
 - [x] Criar `src/lib/rag.ts`
   - Função `parseMarkdownToChunks(md: string): FAQChunk[]` — split por headings `##`
   - Função `cosineSimilarity(a: number[], b: number[]): number`
-  - Função `retrieveTopK(query: string, store: FAQChunk[], k: number): FAQChunk[]`
+  - Função `retrieveTopK(query: string, k: number): Promise<Array<{ heading, text }>>`
 - [x] Criar `src/lib/store.ts`
-  - Singleton `faqStore` com `set(chunks)` e `get(): FAQChunk[]`
+  - Singleton ChromaDB com `set`, `getStatus`, `clear`, `query` (todos async)
 - [x] Criar `src/types/index.ts`
   - Tipos: `Message`, `FAQChunk`, `FAQStatus`, `ChatRequest`, `ChatResponse`
 
@@ -171,16 +193,16 @@ Para usá-la, faça upload do arquivo pela interface do OnboardBot.
   - Recebe `FormData` com `file: File`
   - Valida extensão `.md`
   - Salva `current-faq.md` em `uploads/`
-  - Chama `parseMarkdownToChunks` → gera embeddings com `Promise.all` → salva no store
+  - Chama `parseMarkdownToChunks` → gera embeddings com `Promise.all` → persiste no ChromaDB
   - Retorna `{ success, chunkCount, filename }`
 - [x] Criar `src/app/api/faq/route.ts` — `GET /api/faq`
   - Lê `uploads/current-faq.md`
   - Retorna `{ content, status: FAQStatus }`
 - [x] Criar `src/app/api/chat/route.ts` — `POST /api/chat`
   - Recebe `{ message, history }`
-  - Gera embedding da pergunta → `retrieveTopK(k=3)`
+  - Gera embedding da pergunta (ONNX) → `retrieveTopK(k=3)` via ChromaDB
   - Monta prompt RAG com chunks + histórico + pergunta
-  - Chama `generateAnswer` → retorna `{ answer, retrievedChunks }`
+  - Chama `generateAnswer` (Ollama phi3) → retorna `{ answer, retrievedChunks }`
 
 ---
 

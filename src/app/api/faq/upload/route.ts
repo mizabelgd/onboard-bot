@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { NextRequest, NextResponse } from 'next/server'
 import { parseMarkdownToChunks } from '@/lib/rag'
-import { generateEmbedding } from '@/lib/gemini'
+import { generateEmbedding } from '@/lib/embeddings'
 import { faqStore } from '@/lib/store'
 import type { FAQChunk, UploadResponse } from '@/types'
 
@@ -17,8 +17,8 @@ const UPLOADS_DIR = join(process.cwd(), 'uploads')
  * Pipeline:
  *   1. Valida o arquivo (.md, não vazio, contém headings ##)
  *   2. Divide o conteúdo em chunks por heading ##
- *   3. Gera embeddings de todos os chunks em paralelo (Gemini text-embedding-004)
- *   4. Salva os chunks indexados no store em memória
+ *   3. Gera embeddings de todos os chunks em paralelo (all-MiniLM-L6-v2 via ONNX)
+ *   4. Persiste os chunks indexados no ChromaDB
  *   5. Persiste o arquivo original em uploads/current-faq.md
  *
  * @param request FormData com campo `file: File` (.md)
@@ -63,16 +63,10 @@ export async function POST(request: NextRequest) {
       }))
     )
 
-    faqStore.set(chunks, file.name)
-    const { indexedAt } = faqStore.getStatus()
+    await faqStore.set(chunks, file.name)
 
     await mkdir(UPLOADS_DIR, { recursive: true })
     await writeFile(join(UPLOADS_DIR, 'current-faq.md'), content, 'utf-8')
-    await writeFile(
-      join(UPLOADS_DIR, 'index.json'),
-      JSON.stringify({ chunks, filename: file.name, indexedAt }),
-      'utf-8'
-    )
 
     const response: UploadResponse = {
       success: true,

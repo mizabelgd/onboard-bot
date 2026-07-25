@@ -17,7 +17,7 @@ export const openApiSpec = {
         tags: ['faq'],
         summary: 'Faz upload e indexa um arquivo FAQ',
         description:
-          'Recebe um arquivo Markdown, divide em chunks por headings `##`, gera embeddings via Gemini `text-embedding-004` e salva no vector store em memória.',
+          'Recebe um arquivo Markdown, divide em chunks por headings `##`, gera embeddings via `all-MiniLM-L6-v2` (HuggingFace Transformers / ONNX) e persiste no ChromaDB.',
         requestBody: {
           required: true,
           content: {
@@ -111,7 +111,7 @@ export const openApiSpec = {
         tags: ['chat'],
         summary: 'Executa o pipeline RAG completo',
         description:
-          'Recebe uma mensagem e o histórico da conversa. Gera o embedding da pergunta, recupera os top-K chunks semanticamente mais relevantes por similaridade de cosseno, monta um prompt RAG e envia ao Gemini Flash para geração da resposta.',
+          'Recebe uma mensagem e o histórico da conversa. Gera o embedding da pergunta via all-MiniLM-L6-v2, recupera os top-K chunks mais relevantes no ChromaDB (similaridade de cosseno), monta um prompt RAG e envia ao Ollama (phi3) para geração da resposta.',
         requestBody: {
           required: true,
           content: {
@@ -246,7 +246,7 @@ export const openApiSpec = {
         properties: {
           answer: {
             type: 'string',
-            description: 'Resposta gerada pelo Gemini Flash com base nos chunks recuperados',
+            description: 'Resposta gerada pelo Ollama (phi3) com base nos chunks recuperados',
           },
           retrievedChunks: {
             type: 'array',
