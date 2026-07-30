@@ -1,4 +1,4 @@
-.PHONY: dev build start lint type-check test test-watch install clean reset-faq docker-setup docker-pull docker-dev docker-stop docker-logs help
+.PHONY: dev build start lint type-check test test-watch install clean reset-faq docker-setup docker-pull docker-build download-model docker-dev docker-stop docker-logs help
 
 dev:
 	npm run dev
@@ -32,8 +32,8 @@ reset-faq:
 
 ## ── Docker ─────────────────────────────────────────────────────────────────
 
-## Primeira execução: baixa o modelo phi3 e sobe todos os serviços
-docker-setup: docker-pull docker-dev
+## Primeira execução: baixa o modelo HF no host, builda a imagem, baixa phi3 e sobe tudo
+docker-setup: docker-build docker-pull docker-dev
 
 ## Baixa o modelo phi3 no Ollama (necessário apenas uma vez por volume)
 docker-pull:
@@ -42,8 +42,13 @@ docker-pull:
 	@sleep 8
 	docker compose exec ollama ollama pull phi3
 
-## Build da imagem da aplicação
-docker-build:
+## Baixa o modelo HuggingFace no host para ./hf-cache-build/
+## Usa a rede do macOS (mais estável que a rede de build virtualizada do Docker).
+download-model:
+	node scripts/download-model.mjs
+
+## Build da imagem da aplicação (baixa o modelo no host se necessário)
+docker-build: download-model
 	docker compose build
 
 ## Sobe todos os serviços Docker
@@ -72,8 +77,10 @@ help:
 	@echo "  test-watch    Executa testes em modo watch"
 	@echo "  clean         Remove o diretório .next"
 	@echo "  reset-faq     Remove a FAQ ativa do disco"
-	@echo "  docker-setup  Primeira execução Docker (baixa phi3 + sobe serviços)"
+	@echo "  docker-setup  Primeira execução Docker (baixa modelos + builda + sobe)"
 	@echo "  docker-pull   Baixa o modelo phi3 no Ollama"
+	@echo "  download-model Baixa modelo HF no host para ./hf-cache-build/"
+	@echo "  docker-build  Baixa modelo HF + builda a imagem Docker"
 	@echo "  docker-dev    Sobe todos os serviços Docker"
 	@echo "  docker-stop   Para os containers Docker"
 	@echo "  docker-logs   Mostra logs dos serviços Docker"

@@ -5,14 +5,13 @@ services:
       - "3000:3000"
     volumes:
       - ./uploads:/app/uploads
-      # Cache dos modelos HuggingFace — evita re-download a cada reinicialização
-      - hf-cache:/root/.cache/huggingface
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_MODEL=phi3
       - CHROMA_URL=http://chromadb:8000
       - RAG_TOP_K=3
       - HISTORY_LIMIT=6
+      - HF_HOME=/app/models
     depends_on:
       - ollama
       - chromadb
@@ -38,4 +37,3 @@ services:
 volumes:
   ollama-models:
   chroma-data:
-  hf-cache:

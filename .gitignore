@@ -44,3 +44,6 @@ next-env.d.ts
 /uploads/*.md
 !/uploads/faq-teste.md
 /uploads/*.json
+
+# cache local do modelo HuggingFace usado no docker build — não commitar (binários grandes)
+/hf-cache-build/
