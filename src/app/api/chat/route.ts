@@ -35,6 +35,25 @@ function computeContextOverlap(answer: string, contexts: string[]): boolean {
   return overlap / answerTokens.size >= 0.20
 }
 
+// Saudações, despedidas e perguntas sobre o próprio bot são respondidas SEM
+// usar o FAQ (é o comportamento correto, instruído no próprio prompt de
+// sistema) — então não fazem sentido nas métricas de CUR/Alucinação/Acurácia
+// (ADR 7), que medem se a resposta se apoiou no contexto recuperado. Sem
+// esse filtro, toda saudação seria contada como "alucinação", inflando a
+// taxa artificialmente. Mensagens que combinam saudação + pergunta técnica
+// real (ex.: "Olá, como configuro o SSH?") não batem nesses padrões e
+// continuam sendo avaliadas normalmente.
+const GREETING_ONLY_RE =
+  /^(oi|ol[áa]|e a[íi]|eae|salve|bom dia|boa tarde|boa noite)[\s,!.]*((tudo\s*bem|tudo\s*bom|como\s*vai|como\s*(voc[eê])\s*est[áa])[\s?!.]*)?$/i
+const CLOSING_ONLY_RE = /^(obrigad[oa]|valeu|tchau|at[ée]\s*(mais|logo|breve))[\s,!.]*$/i
+const META_CAPABILITY_RE =
+  /\b(sobre o que (voc[eê])|o que (voc[eê]) (pode|consegue|sabe)|quem (é|e) (voc[eê])|no que (voc[eê]) (pode|consegue))\b/i
+
+function isGreetingOrSmallTalk(message: string): boolean {
+  const normalized = message.trim().toLowerCase()
+  return GREETING_ONLY_RE.test(normalized) || CLOSING_ONLY_RE.test(normalized) || META_CAPABILITY_RE.test(normalized)
+}
+
 /**
  * Instrução de sistema do OnboardBot — enxuta para reduzir tokens de prefill
  * em toda requisição, mantendo o mesmo comportamento (conversa natural,
@@ -212,7 +231,9 @@ export async function POST(request: NextRequest) {
             similarityScores: scores,
             retrievedChunkHeadings: relevantChunks.map((c) => c.heading),
             retrievalFailed: avgScore < SIMILARITY_THRESHOLD,
-            contextUtilized: computeContextOverlap(fullAnswer, relevantChunks.map((c) => c.text)),
+            contextUtilized: isGreetingOrSmallTalk(message)
+              ? undefined
+              : computeContextOverlap(fullAnswer, relevantChunks.map((c) => c.text)),
             embeddingTimeMs,
             vectorSearchTimeMs,
             contextBuildTimeMs,
