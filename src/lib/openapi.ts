@@ -111,7 +111,7 @@ export const openApiSpec = {
         tags: ['chat'],
         summary: 'Executa o pipeline RAG completo',
         description:
-          'Recebe uma mensagem e o histórico da conversa. Gera o embedding da pergunta via all-MiniLM-L6-v2, recupera os top-K chunks mais relevantes no ChromaDB (similaridade de cosseno), monta um prompt RAG e envia ao Ollama (phi3) para geração da resposta.',
+          'Recebe uma mensagem e o histórico da conversa. Gera o embedding da pergunta via all-MiniLM-L6-v2, recupera os top-K chunks mais relevantes no ChromaDB (similaridade de cosseno), monta um prompt RAG e envia ao Ollama (phi3) para geração da resposta em streaming (NDJSON).',
         requestBody: {
           required: true,
           content: {
@@ -134,15 +134,13 @@ export const openApiSpec = {
         },
         responses: {
           '200': {
-            description: 'Resposta gerada pelo modelo com os chunks utilizados como contexto',
+            description:
+              'Stream NDJSON (uma linha = um evento JSON): zero ou mais eventos {"type":"chunk","text":"..."} com pedaços da resposta gerada, seguidos de um evento final {"type":"done","messageId","retrievedChunks","timing"} — ou {"type":"error","error"} em caso de falha durante a geração.',
             content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/ChatResponse' },
-                example: {
-                  answer:
-                    'Para configurar o ambiente local, clone o repositório e execute `make setup`...',
-                  retrievedChunks: ['Como configurar o ambiente local?', 'Requisitos do sistema'],
-                },
+              'application/x-ndjson': {
+                schema: { $ref: '#/components/schemas/ChatStreamEvent' },
+                example:
+                  '{"type":"chunk","text":"Para "}\n{"type":"chunk","text":"configurar..."}\n{"type":"done","messageId":"abc123","retrievedChunks":["Como configurar o ambiente local?"],"timing":{"messageId":"abc123","retrievalTimeMs":140,"generationTimeMs":8500,"totalTimeMs":8650}}',
               },
             },
           },
@@ -240,21 +238,49 @@ export const openApiSpec = {
           },
         },
       },
-      ChatResponse: {
-        type: 'object',
-        required: ['answer', 'retrievedChunks'],
-        properties: {
-          answer: {
-            type: 'string',
-            description: 'Resposta gerada pelo Ollama (phi3) com base nos chunks recuperados',
+      ChatStreamEvent: {
+        description: 'Uma linha do stream NDJSON retornado por POST /chat.',
+        oneOf: [
+          {
+            type: 'object',
+            required: ['type', 'text'],
+            properties: {
+              type: { type: 'string', enum: ['chunk'] },
+              text: { type: 'string', description: 'Pedaço de texto gerado pelo Ollama' },
+            },
           },
-          retrievedChunks: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Headings dos chunks utilizados como contexto (para debug e transparência)',
-            example: ['Como configurar o ambiente local?', 'Requisitos do sistema'],
+          {
+            type: 'object',
+            required: ['type', 'messageId', 'retrievedChunks', 'timing'],
+            properties: {
+              type: { type: 'string', enum: ['done'] },
+              messageId: { type: 'string' },
+              retrievedChunks: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Headings dos chunks utilizados como contexto (para debug e transparência)',
+                example: ['Como configurar o ambiente local?', 'Requisitos do sistema'],
+              },
+              timing: {
+                type: 'object',
+                properties: {
+                  messageId: { type: 'string' },
+                  retrievalTimeMs: { type: 'number' },
+                  generationTimeMs: { type: 'number' },
+                  totalTimeMs: { type: 'number' },
+                },
+              },
+            },
           },
-        },
+          {
+            type: 'object',
+            required: ['type', 'error'],
+            properties: {
+              type: { type: 'string', enum: ['error'] },
+              error: { type: 'string' },
+            },
+          },
+        ],
       },
       ErrorResponse: {
         type: 'object',

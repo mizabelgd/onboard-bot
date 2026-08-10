@@ -8,15 +8,18 @@ const mockDelete = vi.fn()
 const mockQuery = vi.fn()
 
 vi.mock('chromadb', () => ({
-  ChromaClient: vi.fn().mockImplementation(() => ({
-    getOrCreateCollection: vi.fn().mockResolvedValue({
-      count: mockCount,
-      get: mockGet,
-      add: mockAdd,
-      delete: mockDelete,
-      query: mockQuery,
-    }),
-  })),
+  // Função regular (não arrow) para que `new ChromaClient()` funcione no mock do Vitest
+  ChromaClient: vi.fn().mockImplementation(function () {
+    return {
+      getOrCreateCollection: vi.fn().mockResolvedValue({
+        count: mockCount,
+        get: mockGet,
+        add: mockAdd,
+        delete: mockDelete,
+        query: mockQuery,
+      }),
+    }
+  }),
 }))
 
 import { faqStore } from '@/lib/store'
@@ -140,8 +143,8 @@ describe('faqStore.query()', () => {
     const results = await faqStore.query([0.1, 0.2, 0.3], 2)
 
     expect(results).toEqual([
-      { heading: 'Como configurar?', text: 'Texto da seção 1' },
-      { heading: 'Como usar?', text: 'Texto da seção 2' },
+      { heading: 'Como configurar?', text: 'Texto da seção 1', score: 0 },
+      { heading: 'Como usar?', text: 'Texto da seção 2', score: 0 },
     ])
     expect(mockQuery).toHaveBeenCalledWith({
       queryEmbeddings: [[0.1, 0.2, 0.3]],
@@ -156,6 +159,6 @@ describe('faqStore.query()', () => {
     })
 
     const results = await faqStore.query([0.1], 1)
-    expect(results).toEqual([{ heading: '', text: '' }])
+    expect(results).toEqual([{ heading: '', text: '', score: 0 }])
   })
 })

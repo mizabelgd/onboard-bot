@@ -125,7 +125,7 @@ export const faqStore = {
   async query(
     queryEmbedding: number[],
     k: number
-  ): Promise<Array<{ heading: string; text: string }>> {
+  ): Promise<Array<{ heading: string; text: string; score: number }>> {
     const col = await getCollection()
     const results = await col.query({
       queryEmbeddings: [queryEmbedding],
@@ -134,10 +134,13 @@ export const faqStore = {
 
     const metadatas = results.metadatas[0] as Array<{ heading: string } | null>
     const documents = results.documents[0]
+    // ChromaDB cosine space: distance = 1 - cosine_similarity → score = 1 - distance
+    const distances = results.distances?.[0] ?? []
 
     return metadatas.map((meta, i) => ({
       heading: meta?.heading ?? '',
       text: documents[i] ?? '',
+      score: distances[i] != null ? 1 - distances[i] : 0,
     }))
   },
 }

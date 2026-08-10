@@ -57,6 +57,30 @@ Execute npm install e configure o .env.local.`
     expect(chunk.text).toBe('Minha Pergunta\n\nMinha resposta detalhada.')
   })
 
+  it('sub-divide seções com conteúdo maior que o teto de tamanho', () => {
+    const paragraph = 'Frase de exemplo com conteúdo relevante para o teste. '.repeat(10).trim()
+    // 5 parágrafos de ~500 chars cada → conteúdo total bem acima do teto (1000)
+    const bigContent = Array.from({ length: 5 }, () => paragraph).join('\n\n')
+    const md = `## Seção grande\n\n${bigContent}`
+
+    const chunks = parseMarkdownToChunks(md)
+
+    expect(chunks.length).toBeGreaterThan(1)
+    chunks.forEach((chunk) => {
+      expect(chunk.heading).toBe('Seção grande')
+      expect(chunk.text.startsWith('Seção grande\n\n')).toBe(true)
+    })
+    // o conteúdo original inteiro deve estar preservado, apenas repartido
+    const rejoined = chunks.map((c) => c.text.replace('Seção grande\n\n', '')).join('\n\n')
+    expect(rejoined).toBe(bigContent)
+  })
+
+  it('não sub-divide seções dentro do teto de tamanho', () => {
+    const md = '## Seção pequena\n\nConteúdo curto que não precisa ser dividido.'
+    const chunks = parseMarkdownToChunks(md)
+    expect(chunks).toHaveLength(1)
+  })
+
   it('ignora conteúdo antes do primeiro heading ##', () => {
     const md = `# Título do documento
 
@@ -133,8 +157,8 @@ describe('retrieveTopK', () => {
   it('retorna os chunks devolvidos pelo faqStore.query', async () => {
     mockEmbed.mockResolvedValue([1, 0])
     const expected = [
-      { heading: 'Alvo', text: 'Alvo\n\nConteúdo.' },
-      { heading: 'Outro', text: 'Outro\n\nConteúdo.' },
+      { heading: 'Alvo', text: 'Alvo\n\nConteúdo.', score: 0.9 },
+      { heading: 'Outro', text: 'Outro\n\nConteúdo.', score: 0.8 },
     ]
     mockQuery.mockResolvedValue(expected)
 

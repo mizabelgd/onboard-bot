@@ -2,7 +2,40 @@
 
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import type { ChatRequest, ChatResponse, Message } from '@/types'
+import type { ChatRequest, Message } from '@/types'
+
+type ChatStreamEvent =
+  | { type: 'chunk'; text: string }
+  | { type: 'done'; messageId: string; retrievedChunks: string[]; timing: unknown }
+  | { type: 'error'; error: string }
+
+/**
+ * Lê o corpo da resposta como NDJSON (uma linha = um evento JSON), chamando
+ * `onEvent` para cada linha completa recebida. Trata quebras de linha que
+ * caem no meio de um chunk de rede mantendo um buffer entre leituras.
+ */
+async function consumeNdjsonStream(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (event: ChatStreamEvent) => void
+): Promise<void> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      if (!line.trim()) continue
+      onEvent(JSON.parse(line) as ChatStreamEvent)
+    }
+  }
+}
 
 const EXAMPLE_QUESTIONS = [
   'Como configuro o ambiente local?',
@@ -62,6 +95,19 @@ export default function ChatInterface() {
     setIsLoading(true)
     inputRef.current?.focus()
 
+    const assistantMsg = createMessage('assistant', '')
+    setMessages((prev) => [...prev, assistantMsg])
+
+    function updateAssistant(patch: Partial<Message>) {
+      setMessages((prev) => prev.map((m) => (m.id === assistantMsg.id ? { ...m, ...patch } : m)))
+    }
+
+    function appendToAssistant(text: string) {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === assistantMsg.id ? { ...m, content: m.content + text } : m))
+      )
+    }
+
     try {
       const body: ChatRequest = { message: text, history: historySnapshot, sessionId }
       const res = await fetch('/api/chat', {
@@ -70,31 +116,28 @@ export default function ChatInterface() {
         body: JSON.stringify(body),
       })
 
-      const data = (await res.json()) as ChatResponse | { error: string }
-
       if (!res.ok) {
-        const serverMsg = 'error' in data ? data.error : ''
-        setMessages((prev) => [
-          ...prev,
-          createMessage('assistant', friendlyError(res.status, serverMsg), true),
-        ])
+        const data = (await res.json()) as { error: string }
+        updateAssistant({ content: friendlyError(res.status, data.error), isError: true })
         return
       }
 
-      const chatResponse = data as ChatResponse
-      setMessages((prev) => [
-        ...prev,
-        createMessage('assistant', chatResponse.answer, undefined, chatResponse.timing?.messageId),
-      ])
+      if (!res.body) throw new Error('Resposta sem corpo')
+
+      await consumeNdjsonStream(res.body, (event) => {
+        if (event.type === 'chunk') {
+          appendToAssistant(event.text)
+        } else if (event.type === 'done') {
+          updateAssistant({ metricId: event.messageId })
+        } else if (event.type === 'error') {
+          updateAssistant({ content: event.error || 'Erro ao gerar resposta.', isError: true })
+        }
+      })
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        createMessage(
-          'assistant',
-          'Sem conexão com o servidor. Verifique sua internet e tente novamente.',
-          true
-        ),
-      ])
+      updateAssistant({
+        content: 'Sem conexão com o servidor. Verifique sua internet e tente novamente.',
+        isError: true,
+      })
     } finally {
       setIsLoading(false)
     }
@@ -198,7 +241,9 @@ export default function ChatInterface() {
           </div>
         )}
 
-        {messages.map((msg) => (
+        {messages
+          .filter((msg) => !(isLoading && msg.role === 'assistant' && !msg.isError && msg.content === ''))
+          .map((msg) => (
           <div
             key={msg.id}
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -270,7 +315,7 @@ export default function ChatInterface() {
           </div>
         ))}
 
-        {isLoading && (
+        {isLoading && (messages.at(-1)?.content ?? '') === '' && (
           <div className="flex justify-start">
             <div className="bg-neutral-100 rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-2">
               <span className="flex items-center gap-1">

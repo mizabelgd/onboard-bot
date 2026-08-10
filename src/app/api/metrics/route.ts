@@ -6,6 +6,8 @@ function mean(values: number[]): number | null {
   return values.reduce((a, b) => a + b, 0) / values.length
 }
 
+const SIMILARITY_THRESHOLD = 0.30
+
 /**
  * GET /api/metrics
  *
@@ -63,6 +65,49 @@ export async function GET() {
       {}
     )
 
+    // ── Qualidade RAG (ADR 7) ────────────────────────────────────────────────
+    const withScores = timings.filter((t) => t.similarityScores !== undefined)
+    const withContext = timings.filter((t) => t.contextUtilized !== undefined)
+
+    const precisionAtK =
+      withScores.length > 0
+        ? mean(
+            withScores.map((t) => {
+              const scores = t.similarityScores!
+              return scores.filter((s) => s >= SIMILARITY_THRESHOLD).length / scores.length
+            })
+          )
+        : null
+
+    const failedRetrievalRate =
+      withScores.length > 0
+        ? (withScores.filter((t) => t.retrievalFailed).length / withScores.length) * 100
+        : null
+
+    const contextUtilizationRate =
+      withContext.length > 0
+        ? (withContext.filter((t) => t.contextUtilized).length / withContext.length) * 100
+        : null
+
+    const hallucinationRate =
+      withContext.length > 0
+        ? (withContext.filter((t) => !t.contextUtilized).length / withContext.length) * 100
+        : null
+
+    const avgSimilarityScore =
+      withScores.length > 0
+        ? mean(withScores.map((t) => mean(t.similarityScores!)!))
+        : null
+
+    // Acurácia automática (sem depender de feedback do usuário): uma resposta
+    // é considerada correta quando o retrieval encontrou contexto relevante E
+    // a resposta de fato se apoiou nesse contexto — mesmo padrão das demais
+    // métricas RAG, calculado a cada leitura a partir dos dados já coletados.
+    const accuracyRate =
+      withContext.length > 0
+        ? (withContext.filter((t) => !t.retrievalFailed && t.contextUtilized).length / withContext.length) * 100
+        : null
+
     return NextResponse.json({
       totals: {
         sessions: sessions.length,
@@ -86,6 +131,15 @@ export async function GET() {
       satisfaction: {
         avgSatisfactionScore,
         surveyCompletionRate,
+      },
+      rag: {
+        accuracyRate,
+        precisionAtK: precisionAtK !== null ? precisionAtK * 100 : null,
+        failedRetrievalRate,
+        contextUtilizationRate,
+        hallucinationRate,
+        avgSimilarityScore,
+        totalEvaluated: withScores.length,
       },
       recentSessions: sessions.slice(-10).reverse().map((s) => ({
         ...s,

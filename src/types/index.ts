@@ -53,6 +53,23 @@ export interface ResponseTiming {
   generationTimeMs: number
   totalTimeMs: number
   timestamp: string
+  // Campos ADR 8 — enriquecimento para cálculo de métricas de qualidade RAG
+  question?: string
+  answer?: string
+  similarityScores?: number[]         // cosine similarity por chunk recuperado (0–1)
+  retrievedChunkHeadings?: string[]
+  retrievalFailed?: boolean           // true se avg(scores) < SIMILARITY_THRESHOLD
+  contextUtilized?: boolean           // heurística de overlap tokens answer↔context
+  // Instrumentação granular do pipeline (análise de desempenho)
+  embeddingTimeMs?: number            // geração do embedding da query
+  vectorSearchTimeMs?: number         // busca vetorial no ChromaDB
+  contextBuildTimeMs?: number         // montagem do texto de contexto
+  promptBuildTimeMs?: number          // montagem do prompt final
+  timeToFirstTokenMs?: number         // latência até o primeiro token do Ollama
+  ollamaLoadDurationMs?: number       // tempo de carregamento do modelo (relatado pelo Ollama)
+  ollamaPromptEvalDurationMs?: number // tempo de prefill do prompt (relatado pelo Ollama)
+  ollamaEvalDurationMs?: number       // tempo de geração pura (relatado pelo Ollama)
+  ollamaEvalCount?: number            // tokens gerados (relatado pelo Ollama)
 }
 
 export interface SessionSummary {

@@ -1,124 +1,241 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest } from 'next/server'
 import { faqStore } from '@/lib/store'
 import { metricsStore } from '@/lib/metrics-store'
-import { retrieveTopK } from '@/lib/rag'
-import { generateAnswer } from '@/lib/llm'
-import type { ChatRequest, ChatResponse, Message, ResponseTiming } from '@/types'
+import { generateEmbedding } from '@/lib/embeddings'
+import { generateAnswerStream, type OllamaMessage } from '@/lib/llm'
+import { logPipelineTimings } from '@/lib/perf-logger'
+import type { ChatRequest, Message, ResponseTiming } from '@/types'
 
 const HISTORY_LIMIT = parseInt(process.env.HISTORY_LIMIT ?? '6', 10)
 const RAG_TOP_K = parseInt(process.env.RAG_TOP_K ?? '3', 10)
+// Limiar de similaridade cosine abaixo do qual o retrieval é considerado falho (ADR 7)
+const SIMILARITY_THRESHOLD = 0.30
+
+const PT_STOP_WORDS = new Set([
+  'de','a','o','que','e','do','da','em','um','para','com','uma','os','no',
+  'se','na','por','mais','as','dos','como','mas','ao','ele','das','seu',
+  'sua','ou','quando','muito','nos','já','também','só','até','isso','esse',
+  'esta','este','foi','são','tem','não','sim','ter','ser',
+])
+
+function computeContextOverlap(answer: string, contexts: string[]): boolean {
+  const tokenize = (text: string) =>
+    text.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(
+      (t) => t.length >= 3 && !PT_STOP_WORDS.has(t)
+    )
+
+  const answerTokens = new Set(tokenize(answer))
+  if (answerTokens.size === 0) return false
+
+  const contextTokens = new Set(contexts.flatMap(tokenize))
+  let overlap = 0
+  for (const t of answerTokens) {
+    if (contextTokens.has(t)) overlap++
+  }
+  return overlap / answerTokens.size >= 0.20
+}
 
 /**
- * Monta o prompt RAG completo com instrução do sistema, contexto recuperado,
- * histórico da conversa e a pergunta atual.
- *
- * O histórico é truncado nas últimas HISTORY_LIMIT mensagens para evitar
- * que o prompt cresça indefinidamente ao longo da sessão.
+ * Instrução de sistema do OnboardBot — enxuta para reduzir tokens de prefill
+ * em toda requisição, mantendo o mesmo comportamento (conversa natural,
+ * pedido de esclarecimento em pergunta genérica, resposta só com base no
+ * contexto).
  */
-function buildRagPrompt(
-  chunks: { heading: string; text: string }[],
-  history: Message[],
-  message: string
-): string {
-  const system = `Você é um assistente de onboarding de desenvolvedores chamado OnboardBot.
+const SYSTEM_PROMPT = `Você é o OnboardBot, assistente de onboarding de desenvolvedores.
 
-Para saudações, agradecimentos ou mensagens de conversa geral (ex: "oi", "obrigado", "tchau"), responda de forma natural e amigável — sem mencionar o FAQ.
-
-Antes de tentar responder uma pergunta técnica, avalie se ela tem especificidade suficiente. Se a pergunta for genérica demais para ter uma resposta útil sem mais contexto — por exemplo, não especifica qual ferramenta, qual erro, qual processo ou qual ambiente — peça uma informação específica que permita ajudar melhor.
-Exemplos de perguntas genéricas que devem gerar pedido de esclarecimento:
-- "como resolver um erro" → pergunte: qual erro está aparecendo?
-- "não consigo acessar" → pergunte: acessar o quê?
-- "como configuro?" → pergunte: configurar qual ferramenta ou ambiente?
-Faça apenas uma pergunta de esclarecimento por vez, de forma direta e amigável.
-
-Para perguntas suficientemente específicas sobre processos, ferramentas ou informações da empresa, responda APENAS com base nos trechos de FAQ fornecidos abaixo. Não use conhecimento externo.
-Se a pergunta for específica mas a informação não estiver nos trechos fornecidos, diga: "Não encontrei essa informação no FAQ atual. Por favor, consulte seu time ou supervisor."
+- Saudações e conversa geral: responda natural e breve, sem mencionar o FAQ.
+- Pergunta técnica genérica demais (não diz qual ferramenta/erro/processo): peça UM esclarecimento específico, direto.
+- Pergunta técnica específica: responda APENAS com base nos trechos de FAQ abaixo, sem conhecimento externo. Se a informação não estiver nos trechos, diga: "Não encontrei essa informação no FAQ atual. Por favor, consulte seu time ou supervisor."
+- Não repita saudações ("Olá", "Oi") em toda resposta — cumprimente só se o usuário cumprimentar primeiro.
 
 Seja direto e objetivo.`
 
-  const context = chunks
-    .map((chunk, i) => `[Trecho ${i + 1}]\n${chunk.text}`)
-    .join('\n\n')
+// Teto de caracteres por mensagem do histórico incluída no prompt. Sem isso,
+// respostas longas do próprio assistente se acumulam a cada turno e podem
+// estourar o num_ctx do Ollama em conversas com várias perguntas.
+const MAX_HISTORY_MESSAGE_CHARS = 400
 
+function truncate(text: string, maxChars: number): string {
+  return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text
+}
+
+function buildContextSection(chunks: { heading: string; text: string }[]): string {
+  return chunks.map((chunk, i) => `[Trecho ${i + 1}]\n${chunk.text}`).join('\n\n')
+}
+
+/**
+ * Monta as mensagens no formato de chat do Ollama (system + histórico real +
+ * pergunta atual), em vez de um único prompt de texto com o histórico
+ * "achatado" manualmente. Isso é importante: quando o histórico virava texto
+ * dentro de um prompt único (`Usuário: ...\nAssistente: ...`), o modelo às
+ * vezes continuava "inventando" o próximo turno da conversa em vez de parar
+ * na resposta atual. Com turnos reais, o Ollama aplica o template de chat do
+ * modelo e os tokens de parada nativos entre cada turno.
+ */
+function buildMessages(context: string, history: Message[], message: string): OllamaMessage[] {
   const recentHistory = history.slice(-HISTORY_LIMIT)
-  const historySection =
-    recentHistory.length > 0
-      ? '\n\n[Histórico da Conversa]\n' +
-        recentHistory
-          .map((m) => `${m.role === 'user' ? 'Usuário' : 'Assistente'}: ${m.content}`)
-          .join('\n')
-      : ''
+  return [
+    { role: 'system', content: `${SYSTEM_PROMPT}\n\n[Contexto Recuperado]\n${context}` },
+    ...recentHistory.map((m) => ({ role: m.role, content: truncate(m.content, MAX_HISTORY_MESSAGE_CHARS) })),
+    { role: 'user' as const, content: message },
+  ]
+}
 
-  return `${system}\n\n[Contexto Recuperado]\n${context}${historySection}\n\n[Pergunta]\n${message}`
+type StreamEvent =
+  | { type: 'chunk'; text: string }
+  | {
+      type: 'done'
+      messageId: string
+      retrievedChunks: string[]
+      timing: { messageId: string; retrievalTimeMs: number; generationTimeMs: number; totalTimeMs: number }
+    }
+  | { type: 'error'; error: string }
+
+function ndjson(event: StreamEvent): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(event) + '\n')
+}
+
+function jsonError(error: string, status: number): Response {
+  return new Response(JSON.stringify({ error }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
 
 /**
  * POST /api/chat
  *
- * Executa o pipeline RAG completo para uma mensagem do usuário:
+ * Executa o pipeline RAG completo para uma mensagem do usuário, em streaming:
  *   1. Valida a mensagem e o estado do store
- *   2. Recupera os top-k chunks mais relevantes via ChromaDB (com timing)
- *   3. Monta o prompt RAG com contexto + histórico + pergunta
- *   4. Envia ao Ollama (phi3) e retorna a resposta (com timing)
- *   5. Persiste ResponseTiming em metrics.json se sessionId fornecido
+ *   2. Gera o embedding da query e busca os top-k chunks no ChromaDB (com timing)
+ *   3. Filtra chunks abaixo do limiar de similaridade e monta o prompt
+ *   4. Transmite a resposta do Ollama token a token (NDJSON) e persiste métricas ao final
  *
  * @param request JSON { message, history, sessionId? }
- * @returns 200 { answer, retrievedChunks, timing } | 400 { error } | 500 { error }
+ * @returns 200 stream NDJSON de linhas {type:"chunk"|"done"|"error", ...} | 400/500 { error }
  */
 export async function POST(request: NextRequest) {
+  const requestReceivedAt = Date.now()
+
+  let body: ChatRequest
   try {
-    const body = (await request.json()) as ChatRequest
-    const { message, history = [], sessionId } = body
-
-    if (!message?.trim()) {
-      return NextResponse.json({ error: 'Mensagem não pode ser vazia.' }, { status: 400 })
-    }
-
-    const status = await faqStore.getStatus()
-    if (!status.loaded) {
-      return NextResponse.json(
-        { error: 'Nenhuma FAQ carregada. Faça o upload de um arquivo .md primeiro.' },
-        { status: 400 }
-      )
-    }
-
-    const retrievalStart = Date.now()
-    const topChunks = await retrieveTopK(message, RAG_TOP_K)
-    const retrievalTimeMs = Date.now() - retrievalStart
-
-    const prompt = buildRagPrompt(topChunks, history, message)
-
-    const generationStart = Date.now()
-    const answer = await generateAnswer(prompt)
-    const generationTimeMs = Date.now() - generationStart
-
-    const messageId = crypto.randomUUID()
-    const totalTimeMs = retrievalTimeMs + generationTimeMs
-
-    if (sessionId) {
-      const timing: ResponseTiming = {
-        messageId,
-        sessionId,
-        retrievalTimeMs,
-        generationTimeMs,
-        totalTimeMs,
-        timestamp: new Date().toISOString(),
-      }
-      // falha silenciosa — não deve derrubar a resposta do chat
-      metricsStore.appendTiming(timing).catch((err) =>
-        console.error('[POST /api/chat] metrics write failed', err)
-      )
-    }
-
-    const response: ChatResponse = {
-      answer,
-      retrievedChunks: topChunks.map((c) => c.heading),
-      timing: { messageId, retrievalTimeMs, generationTimeMs, totalTimeMs },
-    }
-
-    return NextResponse.json(response)
-  } catch (error) {
-    console.error('[POST /api/chat]', error)
-    return NextResponse.json({ error: 'Erro interno ao processar a mensagem.' }, { status: 500 })
+    body = (await request.json()) as ChatRequest
+  } catch {
+    return jsonError('Corpo da requisição inválido.', 400)
   }
+
+  const { message, history = [], sessionId } = body
+
+  if (!message?.trim()) {
+    return jsonError('Mensagem não pode ser vazia.', 400)
+  }
+
+  const status = await faqStore.getStatus()
+  if (!status.loaded) {
+    return jsonError('Nenhuma FAQ carregada. Faça o upload de um arquivo .md primeiro.', 400)
+  }
+
+  const embeddingStart = Date.now()
+  const queryEmbedding = await generateEmbedding(message)
+  const embeddingTimeMs = Date.now() - embeddingStart
+
+  const searchStart = Date.now()
+  const topChunks = await faqStore.query(queryEmbedding, RAG_TOP_K)
+  const vectorSearchTimeMs = Date.now() - searchStart
+
+  // Só chunks com similaridade acima do limiar viram contexto — evita
+  // injetar ruído irrelevante no prompt quando o match é fraco. Se nenhum
+  // sobrar, o próprio system prompt instrui a resposta "não encontrei".
+  const relevantChunks = topChunks.filter((c) => c.score >= SIMILARITY_THRESHOLD)
+
+  const contextStart = Date.now()
+  const context = buildContextSection(relevantChunks)
+  const contextBuildTimeMs = Date.now() - contextStart
+
+  const promptStart = Date.now()
+  const messages: OllamaMessage[] = buildMessages(context, history, message)
+  const promptBuildTimeMs = Date.now() - promptStart
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let fullAnswer = ''
+      let firstTokenAt: number | null = null
+      const generationStart = Date.now()
+
+      try {
+        const stats = await generateAnswerStream(messages, (piece) => {
+          if (firstTokenAt === null) firstTokenAt = Date.now()
+          fullAnswer += piece
+          controller.enqueue(ndjson({ type: 'chunk', text: piece }))
+        })
+
+        const generationTimeMs = Date.now() - generationStart
+        const timeToFirstTokenMs = (firstTokenAt ?? Date.now()) - generationStart
+        const totalTimeMs = Date.now() - requestReceivedAt
+        const retrievalTimeMs = embeddingTimeMs + vectorSearchTimeMs
+        const messageId = crypto.randomUUID()
+
+        logPipelineTimings(
+          {
+            Embedding: embeddingTimeMs,
+            'Vector Search': vectorSearchTimeMs,
+            'Context Builder': contextBuildTimeMs,
+            'Prompt Builder': promptBuildTimeMs,
+            'LLM Time-to-First-Token': timeToFirstTokenMs,
+            'LLM Inference': generationTimeMs,
+          },
+          totalTimeMs
+        )
+
+        controller.enqueue(
+          ndjson({
+            type: 'done',
+            messageId,
+            retrievedChunks: relevantChunks.map((c) => c.heading),
+            timing: { messageId, retrievalTimeMs, generationTimeMs, totalTimeMs },
+          })
+        )
+        controller.close()
+
+        if (sessionId) {
+          const scores = relevantChunks.map((c) => c.score)
+          const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0
+          const timing: ResponseTiming = {
+            messageId,
+            sessionId,
+            retrievalTimeMs,
+            generationTimeMs,
+            totalTimeMs,
+            timestamp: new Date().toISOString(),
+            question: message,
+            answer: fullAnswer,
+            similarityScores: scores,
+            retrievedChunkHeadings: relevantChunks.map((c) => c.heading),
+            retrievalFailed: avgScore < SIMILARITY_THRESHOLD,
+            contextUtilized: computeContextOverlap(fullAnswer, relevantChunks.map((c) => c.text)),
+            embeddingTimeMs,
+            vectorSearchTimeMs,
+            contextBuildTimeMs,
+            promptBuildTimeMs,
+            timeToFirstTokenMs,
+            ollamaLoadDurationMs: stats.loadDurationMs,
+            ollamaPromptEvalDurationMs: stats.promptEvalDurationMs,
+            ollamaEvalDurationMs: stats.evalDurationMs,
+            ollamaEvalCount: stats.evalCount,
+          }
+          await metricsStore.appendTiming(timing).catch((err) =>
+            console.error('[POST /api/chat] metrics write failed', err)
+          )
+        }
+      } catch (error) {
+        console.error('[POST /api/chat] stream error', error)
+        controller.enqueue(ndjson({ type: 'error', error: 'Erro ao gerar resposta.' }))
+        controller.close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' },
+  })
 }

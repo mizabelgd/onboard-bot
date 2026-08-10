@@ -140,6 +140,12 @@ A avaliação será binária (correta/incorreta), baseada em equivalência semâ
 
 > Accuracy = respostas corretas / total de perguntas
 
+**Nota de implementação:** a avaliação semântica ideal depende do benchmark com resposta esperada (ground truth) descrito na seção 9, que ainda não foi construído. Enquanto isso, a acurácia é aproximada **automaticamente**, a partir dos mesmos dados coletados em cada interação real (sem depender de feedback manual do usuário): uma resposta é considerada correta quando o retrieval encontrou contexto relevante **e** a resposta de fato se apoiou nesse contexto.
+
+> Accuracy (proxy automático) = respostas com (retrieval bem-sucedido E contexto utilizado) / total de respostas avaliadas
+
+A meta mínima (seção 10) permanece ≥ 80% para essa aproximação.
+
 ---
  
 **Taxa de falha de recuperação (Failed Retrieval Rate)**

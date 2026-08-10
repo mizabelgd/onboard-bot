@@ -35,7 +35,7 @@ vi.mock('@/lib/embeddings', () => ({
 }))
 
 vi.mock('@/lib/llm', () => ({
-  generateAnswer: vi.fn(),
+  generateAnswerStream: vi.fn(),
 }))
 
 // Mock do store: substitui o ChromaDB por uma implementação in-memory controlada pelos testes
@@ -50,14 +50,14 @@ vi.mock('@/lib/store', () => ({
 
 import { readFile } from 'fs/promises'
 import { generateEmbedding } from '@/lib/embeddings'
-import { generateAnswer } from '@/lib/llm'
+import { generateAnswerStream } from '@/lib/llm'
 import { faqStore } from '@/lib/store'
 import { POST as uploadPOST } from '@/app/api/faq/upload/route'
 import { GET as faqGET } from '@/app/api/faq/route'
 import { POST as chatPOST } from '@/app/api/chat/route'
 
 const mockEmbed = vi.mocked(generateEmbedding)
-const mockAnswer = vi.mocked(generateAnswer)
+const mockAnswerStream = vi.mocked(generateAnswerStream)
 const mockReadFile = vi.mocked(readFile)
 const mockSet = vi.mocked(faqStore.set)
 const mockGetStatus = vi.mocked(faqStore.getStatus)
@@ -126,6 +126,41 @@ function makeChatRequest(message: string, history = []): NextRequest {
   })
 }
 
+/**
+ * Lê a resposta em streaming NDJSON de POST /api/chat e reconstrói o
+ * formato { answer, retrievedChunks, timing } usado pelos testes.
+ */
+async function readChatStream(res: Response): Promise<{
+  answer: string
+  retrievedChunks: string[]
+  timing?: { messageId: string; retrievalTimeMs: number; generationTimeMs: number; totalTimeMs: number }
+}> {
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let answer = ''
+  let retrievedChunks: string[] = []
+  let timing: { messageId: string; retrievalTimeMs: number; generationTimeMs: number; totalTimeMs: number } | undefined
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.trim()) continue
+      const event = JSON.parse(line)
+      if (event.type === 'chunk') answer += event.text
+      if (event.type === 'done') {
+        retrievedChunks = event.retrievedChunks
+        timing = event.timing
+      }
+    }
+  }
+  return { answer, retrievedChunks, timing }
+}
+
 // --- Setup ---
 
 beforeEach(() => {
@@ -152,11 +187,14 @@ beforeEach(() => {
     _storeFilename = ''
   })
   mockQuery.mockImplementation(async (_embedding: number[], k: number) =>
-    _storeChunks.slice(0, k)
+    _storeChunks.slice(0, k).map((c) => ({ heading: c.heading, text: c.text, score: 0.9 }))
   )
 
   mockEmbed.mockResolvedValue(EMBEDDING_FIXO)
-  mockAnswer.mockResolvedValue(RESPOSTA_MODELO)
+  mockAnswerStream.mockImplementation(async (_prompt, onToken) => {
+    onToken(RESPOSTA_MODELO)
+    return { fullText: RESPOSTA_MODELO, loadDurationMs: 0, promptEvalDurationMs: 0, evalDurationMs: 0, evalCount: 0 }
+  })
   mockReadFile.mockRejectedValue(
     Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' })
   )
@@ -194,7 +232,7 @@ describe('Cenário 1: upload → indexação → chat completo', () => {
     await uploadPOST(makeUploadRequest(FAQ_VALIDA))
 
     const res = await chatPOST(makeChatRequest('Como configuro o ambiente?'))
-    const body = await res.json()
+    const body = await readChatStream(res)
 
     expect(res.status).toBe(200)
     expect(body.answer).toBe(RESPOSTA_MODELO)
@@ -225,7 +263,7 @@ describe('Cenário 2: troca de FAQ durante sessão ativa', () => {
     await uploadPOST(makeUploadRequest(FAQ_NOVA, 'faq-nova.md'))
 
     const res = await chatPOST(makeChatRequest('Como fazer deploy?'))
-    const body = await res.json()
+    const body = await readChatStream(res)
 
     expect(res.status).toBe(200)
     expect(body.retrievedChunks).toBeDefined()
@@ -244,10 +282,13 @@ describe('Cenário 2: troca de FAQ durante sessão ativa', () => {
 describe('Cenário 3: pergunta fora do FAQ', () => {
   it('resposta do modelo é repassada ao cliente sem modificação', async () => {
     await uploadPOST(makeUploadRequest(FAQ_VALIDA))
-    mockAnswer.mockResolvedValue(RESPOSTA_FORA_FAQ)
+    mockAnswerStream.mockImplementation(async (_prompt, onToken) => {
+      onToken(RESPOSTA_FORA_FAQ)
+      return { fullText: RESPOSTA_FORA_FAQ, loadDurationMs: 0, promptEvalDurationMs: 0, evalDurationMs: 0, evalCount: 0 }
+    })
 
     const res = await chatPOST(makeChatRequest('Como fazer uma pizza?'))
-    const body = await res.json()
+    const body = await readChatStream(res)
 
     expect(res.status).toBe(200)
     expect(body.answer).toBe(RESPOSTA_FORA_FAQ)
@@ -263,7 +304,7 @@ describe('Cenário 4: chunks recuperados por pergunta', () => {
     await uploadPOST(makeUploadRequest(FAQ_VALIDA))
 
     const res = await chatPOST(makeChatRequest('Como abrir um PR?'))
-    const { retrievedChunks } = await res.json()
+    const { retrievedChunks } = await readChatStream(res)
 
     const headingsValidos = [
       'Como solicitar acesso ao Git?',
@@ -279,7 +320,7 @@ describe('Cenário 4: chunks recuperados por pergunta', () => {
     await uploadPOST(makeUploadRequest(FAQ_VALIDA))
 
     const res = await chatPOST(makeChatRequest('Alguma pergunta'))
-    const { retrievedChunks } = await res.json()
+    const { retrievedChunks } = await readChatStream(res)
 
     expect(retrievedChunks.length).toBeLessThanOrEqual(3)
   })
