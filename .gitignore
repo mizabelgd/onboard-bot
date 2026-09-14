@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# uploads (FAQ ativa gerada em runtime — não commitar)
+/uploads/*.md
+!/uploads/faq-teste.md
+/uploads/*.json
+
+# cache local do modelo HuggingFace usado no docker build — não commitar (binários grandes)
+/hf-cache-build/

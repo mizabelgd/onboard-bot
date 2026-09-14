@@ -15,8 +15,10 @@ O OnboardBot permite que uma equipe carregue um arquivo FAQ em Markdown. A parti
 1. Usuário faz upload de um `FAQ.md`
 2. O sistema divide o conteúdo em chunks e gera embeddings para cada um
 3. Ao receber uma pergunta, recupera os top-3 chunks semanticamente mais relevantes
-4. Envia os chunks + pergunta ao Gemini Flash, que gera a resposta
+4. Envia os chunks + pergunta ao Ollama phi3 (local), que gera a resposta
 5. Um novo upload substitui a base de conhecimento ativa
+
+**O chatbot é conversacional.** O histórico da sessão é mantido no cliente (React state) e as últimas 6 mensagens são enviadas junto com cada pergunta. Isso permite perguntas de acompanhamento naturais — "pode detalhar?", "e no Windows?", "como faço isso para o outro ambiente?" — sem que o usuário precise repetir o contexto. O histórico não é persistido: ao recarregar a página, a conversa começa do zero (a FAQ carregada é mantida).
 
 ---
 
@@ -25,12 +27,13 @@ O OnboardBot permite que uma equipe carregue um arquivo FAQ em Markdown. A parti
 | Camada | Tecnologia |
 |---|---|
 | Frontend / Backend | Next.js 16 + React 19 + Tailwind CSS v4 |
-| LLM | Google Gemini Flash (`gemini-1.5-flash`) |
-| Embeddings | Google Gemini (`text-embedding-004`) |
-| Vector Store | Array in-memory (TypeScript puro) |
+| LLM | Ollama (`phi3`) — execução local, zero custo |
+| Embeddings | `all-MiniLM-L6-v2` via `@huggingface/transformers` (ONNX, 384 dims) |
+| Vector Store | ChromaDB — banco vetorial persistente |
 | Markdown | `react-markdown` |
+| Orquestração | Docker Compose |
 
-Sem banco de dados. Sem LangChain. Sem banco vetorial. Uma única API key.
+Sem API key. Sem serviços externos. Execução 100% local.
 
 ---
 
@@ -38,29 +41,47 @@ Sem banco de dados. Sem LangChain. Sem banco vetorial. Uma única API key.
 
 ### Pré-requisitos
 
-- Node.js 20+
-- Conta no [Google AI Studio](https://aistudio.google.com/app/apikey) para obter a chave da API Gemini (gratuito)
+- [Docker](https://docs.docker.com/get-docker/) e Docker Compose
+- (Opcional para desenvolvimento local sem Docker) Node.js 20+, Ollama e ChromaDB instalados
 
-### Instalação
+### Execução com Docker (recomendado)
 
 ```bash
 git clone <repo>
 cd onboard-bot
-npm install
-npm install @google/generative-ai react-markdown
+
+# Primeira execução: baixa o modelo phi3 e sobe todos os serviços
+make docker-setup
 ```
 
-### Variáveis de ambiente
+Acesse [http://localhost:3000](http://localhost:3000).
+
+> **Nota:** Na primeira execução, o modelo `all-MiniLM-L6-v2` (~90 MB) é baixado automaticamente do HuggingFace Hub quando a primeira FAQ é enviada. O modelo fica em cache no volume `hf-cache` para execuções futuras.
+
+### Execução local (sem Docker)
+
+Instale e inicie o [Ollama](https://ollama.ai) e o [ChromaDB](https://docs.trychroma.com) localmente:
+
+```bash
+# Ollama
+ollama pull phi3
+ollama serve
+
+# ChromaDB
+pip install chromadb
+chroma run --host 0.0.0.0 --port 8000
+```
 
 Crie o arquivo `.env.local` na raiz:
 
 ```bash
-GEMINI_API_KEY=sua_chave_aqui
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=phi3
+CHROMA_URL=http://localhost:8000
 ```
 
-### Rodar localmente
-
 ```bash
+npm install
 npm run dev
 ```
 
@@ -84,13 +105,15 @@ src/
 │   ├── FAQUpload.tsx
 │   └── FAQViewer.tsx
 ├── lib/
-│   ├── gemini.ts                   # Cliente LLM + embeddings
+│   ├── embeddings.ts               # all-MiniLM-L6-v2 via @huggingface/transformers (ONNX)
+│   ├── llm.ts                      # Ollama HTTP API (phi3)
 │   ├── rag.ts                      # Chunking, cosine similarity, retrieval
-│   └── store.ts                    # Singleton do vector store
+│   ├── store.ts                    # Singleton ChromaDB (client + collection)
+│   └── metrics-store.ts            # Singleton de métricas (JSON)
 └── types/index.ts
 uploads/
 ├── current-faq.md                  # FAQ ativa (gitignored)
-└── index.json                      # Índice serializado (gitignored)
+└── metrics.json                    # Métricas de sessões (gitignored)
 ```
 
 Documentação de arquitetura completa em [ARQUITETURA.md](./ARQUITETURA.md).
@@ -115,6 +138,32 @@ Clone o repositório e execute `make setup`...
 Crie uma branch a partir de `main`, faça suas alterações...
 ```
 
+### FAQ de teste
+
+O arquivo [`uploads/faq-teste.md`](./uploads/faq-teste.md) é uma base de conhecimento fictícia com **100 perguntas e respostas** pronta para uso nos testes do protótipo. Os dados são fictícios (empresa imaginária **Nexus Sistemas**) para não expor informações reais em ambiente de demonstração.
+
+**Stack fictícia coberta:** Node.js · TypeScript · PostgreSQL · Redis · MongoDB · Docker · Kubernetes (EKS) · GitHub Actions · Terraform · Grafana · Sentry · PagerDuty · Datadog · LaunchDarkly · BullMQ · SendGrid · Zod · Jest
+
+**Temas das perguntas:**
+
+| Tema | Perguntas |
+|---|---|
+| Git, branches e Pull Requests | 8 |
+| Setup e ambiente local | 8 |
+| Jira, Slack e comunicação | 7 |
+| CI/CD e deploy | 7 |
+| Banco de dados e migrations | 6 |
+| Testes (unitários, integração, cobertura) | 5 |
+| Segurança e boas práticas | 6 |
+| Infraestrutura e cloud (AWS) | 7 |
+| Arquitetura de código e padrões | 9 |
+| Monitoramento e logs | 6 |
+| Processos ágeis (Scrum/Kanban) | 7 |
+| Ferramentas (VS Code, Docker, Storybook) | 7 |
+| RH, carreira e onboarding | 7 |
+
+Para usá-la, faça upload do arquivo pela interface do OnboardBot.
+
 ---
 
 ## Roadmap de implementação
@@ -122,16 +171,17 @@ Crie uma branch a partir de `main`, faça suas alterações...
 ### Etapa 1 — Infraestrutura RAG `lib/`
 > Estimativa: 2–3h
 
-- [ ] Criar `src/lib/gemini.ts`
-  - Função `generateEmbedding(text: string): Promise<number[]>` — chama `text-embedding-004`
-  - Função `generateAnswer(prompt: string): Promise<string>` — chama `gemini-1.5-flash`
-- [ ] Criar `src/lib/rag.ts`
+- [x] Criar `src/lib/embeddings.ts`
+  - Função `generateEmbedding(text: string): Promise<number[]>` — `all-MiniLM-L6-v2` via ONNX (384 dims)
+- [x] Criar `src/lib/llm.ts`
+  - Função `generateAnswer(prompt: string): Promise<string>` — Ollama HTTP API (phi3)
+- [x] Criar `src/lib/rag.ts`
   - Função `parseMarkdownToChunks(md: string): FAQChunk[]` — split por headings `##`
   - Função `cosineSimilarity(a: number[], b: number[]): number`
-  - Função `retrieveTopK(query: string, store: FAQChunk[], k: number): FAQChunk[]`
-- [ ] Criar `src/lib/store.ts`
-  - Singleton `faqStore` com `set(chunks)` e `get(): FAQChunk[]`
-- [ ] Criar `src/types/index.ts`
+  - Função `retrieveTopK(query: string, k: number): Promise<Array<{ heading, text }>>`
+- [x] Criar `src/lib/store.ts`
+  - Singleton ChromaDB com `set`, `getStatus`, `clear`, `query` (todos async)
+- [x] Criar `src/types/index.ts`
   - Tipos: `Message`, `FAQChunk`, `FAQStatus`, `ChatRequest`, `ChatResponse`
 
 ---
@@ -139,41 +189,41 @@ Crie uma branch a partir de `main`, faça suas alterações...
 ### Etapa 2 — API Routes
 > Estimativa: 2–3h
 
-- [ ] Criar `src/app/api/faq/upload/route.ts` — `POST /api/faq/upload`
+- [x] Criar `src/app/api/faq/upload/route.ts` — `POST /api/faq/upload`
   - Recebe `FormData` com `file: File`
   - Valida extensão `.md`
   - Salva `current-faq.md` em `uploads/`
-  - Chama `parseMarkdownToChunks` → gera embeddings com `Promise.all` → salva no store
+  - Chama `parseMarkdownToChunks` → gera embeddings com `Promise.all` → persiste no ChromaDB
   - Retorna `{ success, chunkCount, filename }`
-- [ ] Criar `src/app/api/faq/route.ts` — `GET /api/faq`
+- [x] Criar `src/app/api/faq/route.ts` — `GET /api/faq`
   - Lê `uploads/current-faq.md`
   - Retorna `{ content, status: FAQStatus }`
-- [ ] Criar `src/app/api/chat/route.ts` — `POST /api/chat`
+- [x] Criar `src/app/api/chat/route.ts` — `POST /api/chat`
   - Recebe `{ message, history }`
-  - Gera embedding da pergunta → `retrieveTopK(k=3)`
+  - Gera embedding da pergunta (ONNX) → `retrieveTopK(k=3)` via ChromaDB
   - Monta prompt RAG com chunks + histórico + pergunta
-  - Chama `generateAnswer` → retorna `{ answer, retrievedChunks }`
+  - Chama `generateAnswer` (Ollama phi3) → retorna `{ answer, retrievedChunks }`
 
 ---
 
 ### Etapa 3 — Componentes de UI
 > Estimativa: 3–4h
 
-- [ ] Criar `src/components/FAQUpload.tsx`
+- [x] Criar `src/components/FAQUpload.tsx`
   - Input de arquivo com drag-and-drop ou botão
   - Feedback visual: "Indexando...", "X perguntas indexadas", erros
   - Ao enviar, chama `POST /api/faq/upload`
-- [ ] Criar `src/components/FAQViewer.tsx`
+- [x] Criar `src/components/FAQViewer.tsx`
   - Busca `GET /api/faq` ao montar
   - Renderiza conteúdo com `react-markdown`
   - Exibe nome do arquivo e data de upload
   - Seção colapsável (toggle)
-- [ ] Criar `src/components/ChatInterface.tsx`
+- [x] Criar `src/components/ChatInterface.tsx`
   - Lista de mensagens com scroll automático
   - Input de texto + botão enviar
   - Estado de loading durante a resposta
   - Envia `POST /api/chat` com histórico acumulado
-- [ ] Atualizar `src/app/page.tsx`
+- [x] Atualizar `src/app/page.tsx`
   - Layout de 2 colunas: painel esquerdo (FAQUpload + FAQViewer) | painel direito (ChatInterface)
   - Responsivo para mobile
 
@@ -182,27 +232,65 @@ Crie uma branch a partir de `main`, faça suas alterações...
 ### Etapa 4 — Integração e testes manuais
 > Estimativa: 2h
 
-- [ ] Testar upload → indexação → chat completo
-- [ ] Testar troca de FAQ durante sessão ativa
-- [ ] Testar pergunta fora do FAQ (resposta negativa esperada)
-- [ ] Verificar no console os chunks recuperados por pergunta
-- [ ] Testar upload de arquivo inválido (sem headings `##`, extensão errada)
-- [ ] Testar comportamento com restart do servidor (re-indexação a partir do `index.json`)
+- [x] Testar upload → indexação → chat completo
+- [x] Testar troca de FAQ durante sessão ativa
+- [x] Testar pergunta fora do FAQ (resposta negativa esperada)
+- [x] Verificar no console os chunks recuperados por pergunta
+- [x] Testar upload de arquivo inválido (sem headings `##`, extensão errada)
+- [x] Testar comportamento com restart do servidor (re-indexação a partir do `index.json`)
 
 ---
 
 ### Etapa 5 — Polish e preparação da demo
 > Estimativa: 1–2h
 
-- [ ] Loading spinner durante indexação e geração de resposta
-- [ ] Mensagens de erro amigáveis (API key inválida, sem FAQ carregada)
-- [ ] Ajuste visual final com Tailwind
+- [x] Loading spinner durante indexação e geração de resposta
+- [x] Mensagens de erro amigáveis (API key inválida, sem FAQ carregada)
+- [x] Permitir exclusão da base carregada (botão "Remover FAQ" que limpa o store e apaga `index.json`)
+- [x] Ajuste visual final com Tailwind
 - [ ] Gravar screencast da demo (upload → chat)
 - [ ] Preparar FAQ de exemplo para a apresentação
 
 ---
 
-### Total estimado: 10–14 horas
+### Etapa 6 — Observabilidade e Métricas Acadêmicas
+> Estimativa: 3–4h
+
+**M1 — Tipos e persistência de métricas**
+- [x] Adicionar tipos `MessageFeedback`, `ResponseTiming`, `SessionSummary` em `src/types/index.ts`
+- [x] Criar `src/lib/metrics-store.ts` — singleton com leitura/escrita em `uploads/metrics.json`
+
+**M2 — Instrumentar o chat com timing**
+- [x] Medir `retrievalTimeMs` e `generationTimeMs` em `src/app/api/chat/route.ts`
+- [x] Retornar campo `timing` em `ChatResponse`
+
+**M3 — Rotas de métricas**
+- [x] Criar `src/app/api/metrics/route.ts` — `GET /api/metrics` com métricas calculadas (eficiência, efetividade, satisfação)
+- [x] Criar `src/app/api/metrics/feedback/route.ts` — `POST /api/metrics/feedback`
+- [x] Criar `src/app/api/metrics/session/route.ts` — `POST /api/metrics/session`
+
+**M4 — Feedback por mensagem no chat**
+- [x] Adicionar botões 👍 e 👎 após cada resposta do assistente em `ChatInterface.tsx`
+- [x] Enviar feedback para `POST /api/metrics/feedback` ao clicar (uma vez por mensagem)
+
+**M5 — Ciclo de vida da sessão**
+- [x] Gerar `sessionId` ao montar `ChatInterface.tsx`
+- [x] Adicionar botão "Encerrar conversa" (visível após a primeira mensagem)
+- [x] Modal de encerramento: "Sua dúvida foi resolvida?" + avaliação 1–5 estrelas (opcional)
+- [x] Enviar resumo da sessão para `POST /api/metrics/session` ao confirmar
+
+**M6 — Dashboard de métricas**
+- [x] Criar `src/components/MetricsDashboard.tsx` — cards de métricas + tabela de sessões recentes
+- [x] Criar `src/app/dashboard/page.tsx` — rota `/dashboard`
+- [x] Adicionar link "Métricas" no header de `page.tsx`
+
+**M7 — Documentação**
+- [ ] Atualizar `ARQUITETURA.md` com seção de observabilidade (seção 20)
+- [ ] Atualizar `README.md` com descrição das métricas e acesso ao dashboard
+
+---
+
+### Total estimado: 13–18 horas
 
 | Etapa | Horas |
 |---|---|
@@ -211,7 +299,8 @@ Crie uma branch a partir de `main`, faça suas alterações...
 | 3 — UI | 3–4h |
 | 4 — Integração | 2h |
 | 5 — Polish | 1–2h |
-| **Total** | **10–14h** |
+| 6 — Observabilidade e Métricas | 3–4h |
+| **Total** | **13–18h** |
 
 ---
 
